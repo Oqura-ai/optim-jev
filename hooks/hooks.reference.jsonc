@@ -1,0 +1,140 @@
+// Reference only: Claude Code loads hooks/hooks.json, never this file.
+// Source: https://code.claude.com/docs/en/hooks
+// To enable an event, copy its line into hooks.json (valid JSON, no comments,
+// only "description" and "hooks" allowed at the top level).
+//
+// Handler types and their fields:
+//   command  : command, args?, async?, asyncRewake?, shell? ("bash" | "powershell")
+//   http     : url, headers?, allowedEnvVars?
+//   mcp_tool : server, tool, input?
+//   prompt   : prompt ($ARGUMENTS placeholder), model?
+//   agent    : prompt, model?
+//   common   : if? ("Bash(rm *)"), timeout? (seconds), statusMessage?
+//
+// "matcher" filters which occurrences fire the hook (regex / "|"-separated);
+// omit it for events without matcher support.
+{
+  "description": "optim-jev hooks",
+  "hooks": {
+    // ---- Session lifecycle ----
+
+    // Session begins or resumes. matcher: startup|resume|clear|compact|fork. Can block: no
+    // "SessionStart": [{ "matcher": "startup", "hooks": [{ "type": "command", "command": "..." }] }],
+
+    // Started with --init-only or -p --init/--maintenance. matcher: init|maintenance. Can block: no
+    // "Setup": [{ "matcher": "init", "hooks": [{ "type": "command", "command": "..." }] }],
+
+    // Session terminates. matcher: clear|resume|logout|prompt_input_exit|other. Can block: no
+    // "SessionEnd": [{ "hooks": [{ "type": "command", "command": "..." }] }],
+
+    // ---- Prompts ----
+
+    // Prompt submitted, before Claude processes it. No matcher. Can block: yes
+    // "UserPromptSubmit": [{ "hooks": [{ "type": "command", "command": "..." }] }],
+
+    // User-typed slash command expands into a prompt. matcher: command name. Can block: yes
+    // "UserPromptExpansion": [{ "matcher": "compact", "hooks": [{ "type": "command", "command": "..." }] }],
+
+    // ---- Tool calls ----
+
+    // Before a tool call runs. matcher: tool name. Can block: yes
+    // "PreToolUse": [{ "matcher": "Bash|Read|Edit", "hooks": [{ "type": "command", "command": "..." }] }],
+
+    // Tool call needs a permission decision. matcher: tool name. Can block: no
+    // "PermissionRequest": [{ "matcher": "Bash", "hooks": [{ "type": "command", "command": "..." }] }],
+
+    // Auto mode denied a tool call. matcher: tool name. Can block: no
+    // "PermissionDenied": [{ "matcher": "Bash", "hooks": [{ "type": "command", "command": "..." }] }],
+
+    // After a tool call succeeds. matcher: tool name. Can block: no
+    // "PostToolUse": [{ "matcher": "Bash|Read", "hooks": [{ "type": "command", "command": "..." }] }],
+
+    // After a tool call fails. matcher: tool name. Can block: no
+    // "PostToolUseFailure": [{ "matcher": "Bash", "hooks": [{ "type": "command", "command": "..." }] }],
+
+    // After a whole batch of parallel tool calls resolves. No matcher. Can block: yes
+    // "PostToolBatch": [{ "hooks": [{ "type": "command", "command": "..." }] }],
+
+    // ---- Turn / response ----
+
+    // While assistant message text is displayed. No matcher. Can block: no
+    // "MessageDisplay": [{ "hooks": [{ "type": "command", "command": "..." }] }],
+
+    // Claude finishes responding. No matcher. Can block: yes
+    // "Stop": [{ "hooks": [{ "type": "command", "command": "..." }] }],
+
+    // Turn ended due to an API error. matcher: rate_limit|overloaded|authentication_failed|
+    //   oauth_org_not_allowed|account_on_hold|billing_error|invalid_request|model_not_found|
+    //   server_error|max_output_tokens|cloud_credential_error|unknown. Can block: no
+    // "StopFailure": [{ "matcher": "rate_limit", "hooks": [{ "type": "command", "command": "..." }] }],
+
+    // Claude Code sends a notification. matcher: notification type. Can block: no
+    // "Notification": [{ "hooks": [{ "type": "command", "command": "..." }] }],
+
+    // ---- Context / compaction ----
+
+    // Before context compaction. matcher: manual|auto. Can block: yes
+    // "PreCompact": [{ "matcher": "auto", "hooks": [{ "type": "command", "command": "..." }] }],
+
+    // After context compaction completes. matcher: manual|auto. Can block: no
+    // "PostCompact": [{ "matcher": "auto", "hooks": [{ "type": "command", "command": "..." }] }],
+
+    // CLAUDE.md or .claude/rules/*.md loaded. matcher: session_start|nested_traversal|
+    //   path_glob_match|include|compact. Can block: no
+    // "InstructionsLoaded": [{ "hooks": [{ "type": "command", "command": "..." }] }],
+
+    // ---- Model ----
+
+    // Before a requested model switch. matcher: canonical model name. Can block: yes
+    // "PreModelSwitch": [{ "hooks": [{ "type": "command", "command": "..." }] }],
+
+    // After the session's model changes. matcher: canonical model name. Can block: no
+    // "PostModelSwitch": [{ "hooks": [{ "type": "command", "command": "..." }] }],
+
+    // ---- Subagents, tasks, teams ----
+
+    // Subagent spawned. matcher: agent type. Can block: no
+    // "SubagentStart": [{ "matcher": "Explore", "hooks": [{ "type": "command", "command": "..." }] }],
+
+    // Subagent finishes. matcher: agent type. Can block: yes
+    // "SubagentStop": [{ "matcher": "Explore", "hooks": [{ "type": "command", "command": "..." }] }],
+
+    // Task being created via TaskCreate. No matcher. Can block: yes
+    // "TaskCreated": [{ "hooks": [{ "type": "command", "command": "..." }] }],
+
+    // Task being marked completed. No matcher. Can block: yes
+    // "TaskCompleted": [{ "hooks": [{ "type": "command", "command": "..." }] }],
+
+    // Agent-team teammate about to go idle. No matcher. Can block: yes
+    // "TeammateIdle": [{ "hooks": [{ "type": "command", "command": "..." }] }],
+
+    // ---- Workspace / config ----
+
+    // Config file changes mid-session. matcher: user_settings|project_settings|
+    //   local_settings|policy_settings|skills. Can block: yes
+    // "ConfigChange": [{ "hooks": [{ "type": "command", "command": "..." }] }],
+
+    // Working directory changes. No matcher. Can block: no
+    // "CwdChanged": [{ "hooks": [{ "type": "command", "command": "..." }] }],
+
+    // Working directory added mid-session. matcher: slash_command|register_repo_root. Can block: no
+    // "DirectoryAdded": [{ "hooks": [{ "type": "command", "command": "..." }] }],
+
+    // Watched file changes on disk. matcher: literal filenames to watch. Can block: no
+    // "FileChanged": [{ "matcher": "package.json", "hooks": [{ "type": "command", "command": "..." }] }],
+
+    // Worktree being created. No matcher. Can block: yes
+    // "WorktreeCreate": [{ "hooks": [{ "type": "command", "command": "..." }] }],
+
+    // Worktree being removed. No matcher. Can block: yes
+    // "WorktreeRemove": [{ "hooks": [{ "type": "command", "command": "..." }] }],
+
+    // ---- MCP ----
+
+    // MCP server requests user input during a tool call. matcher: MCP server name. Can block: yes
+    // "Elicitation": [{ "hooks": [{ "type": "command", "command": "..." }] }],
+
+    // User responded to an MCP elicitation. matcher: MCP server name. Can block: yes
+    // "ElicitationResult": [{ "hooks": [{ "type": "command", "command": "..." }] }]
+  }
+}

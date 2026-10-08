@@ -1,0 +1,6 @@
+*
+!.gitignore
+!jev_router/
+jev_router/*
+!jev_router/rules.json
+!jev_router/RULES.md

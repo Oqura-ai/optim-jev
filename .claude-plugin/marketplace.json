@@ -1,0 +1,16 @@
+{
+  "name": "optim-jev",
+  "owner": {
+    "name": "oqura.ai",
+    "url": "https://github.com/Oqura-ai"
+  },
+  "plugins": [
+    {
+      "name": "optim-jev",
+      "source": "./",
+      "description": "Token-usage optimization tools for Claude Code workflows.",
+      "version": "0.1.0",
+      "license": "MIT"
+    }
+  ]
+}

@@ -1,0 +1,119 @@
+{
+  "name": "optim-jev",
+  "version": "0.1.0",
+  "description": "Jev based token-usage optimization tools for Claude Code workflows.",
+  "license": "MIT",
+  "userConfig": {
+    "typesafe_api_key": {
+      "type": "string",
+      "title": "TypeSafe API key",
+      "description": "Key for the Jev API. Leave empty to use the TYPESAFE_API_KEY environment variable.",
+      "sensitive": true
+    },
+    "python": {
+      "type": "string",
+      "title": "Python executable",
+      "description": "Python 3.10+ used to run the tools, e.g. python, python3 or a full path. Empty means python."
+    },
+    "jev_compacter_mode": {
+      "type": "string",
+      "title": "Compaction: Jev",
+      "description": "on: /compact and auto-compaction prune stale tool calls with Jev, keeping everything else verbatim. off: Claude Code's built-in summary.",
+      "options": ["on", "off"],
+      "default": "on"
+    },
+    "jev_compacter_soft_percent": {
+      "type": "number",
+      "title": "Compaction: soft threshold (%)",
+      "description": "Context fill at which Jev pruning is tried after a turn. Empty means 60.",
+      "min": 1,
+      "max": 100
+    },
+    "jev_compacter_hard_percent": {
+      "type": "number",
+      "title": "Compaction: hard threshold (%)",
+      "description": "Context fill at which compaction must shrink, falling back to the built-in summary. Empty means 85.",
+      "min": 1,
+      "max": 100
+    },
+    "jev_compacter_target_percent": {
+      "type": "number",
+      "title": "Compaction: target (%)",
+      "description": "A pruning that lands at or below this fill is always applied. Empty means 40.",
+      "min": 0,
+      "max": 100
+    },
+    "jev_compacter_min_freed_tokens": {
+      "type": "number",
+      "title": "Compaction: minimum tokens freed",
+      "description": "Above the target, a pruning is applied only if it frees at least this many tokens. Empty means 8000.",
+      "min": 0
+    },
+    "jev_compacter_keep_threshold": {
+      "type": "number",
+      "title": "Compaction: keep threshold",
+      "description": "Minimum Jev probability for a tool call or its output to stay. Empty means 0.5.",
+      "min": 0,
+      "max": 1
+    },
+    "jev_compacter_preserve_recent_messages": {
+      "type": "number",
+      "title": "Compaction: recent messages kept",
+      "description": "Newest messages never touched. Empty means 6.",
+      "min": 0
+    },
+    "jev_skills_mode": {
+      "type": "string",
+      "title": "Skills: Jev picker",
+      "description": "on: the built-in list of every skill is left out; Jev shortlists the skills each prompt needs. /jev-skills on|off changes it per session.",
+      "options": ["off", "on"],
+      "default": "off"
+    },
+    "jev_skills_scope": {
+      "type": "string",
+      "title": "Skills: scope",
+      "description": "project: .claude/skills in this project. global: also ~/.claude/skills and installed plugins' skills, whose folders Claude may then read without asking.",
+      "options": ["project", "global"],
+      "default": "project"
+    },
+    "jev_skills_max_picks": {
+      "type": "number",
+      "title": "Skills: shortlist size",
+      "description": "Most skills shortlisted for one prompt. Empty means 3.",
+      "min": 1,
+      "max": 10
+    },
+    "jev_skills_min_percent": {
+      "type": "number",
+      "title": "Skills: shortlist bar (%)",
+      "description": "Jev's share a skill needs to be shortlisted (it must also beat 'none'). Empty means 30.",
+      "min": 1,
+      "max": 100
+    },
+    "jev_router_mode": {
+      "type": "string",
+      "title": "Router: default mode",
+      "description": "on: the main model changes files only through subagents, and Jev picks each subagent's model. /jev-route on|off changes it per session.",
+      "options": ["off", "on"],
+      "default": "off"
+    },
+    "jev_router_cap": {
+      "type": "string",
+      "title": "Router: cap at the session model",
+      "description": "on: Jev never picks a subagent model above the session's (rules and escalation still can).",
+      "options": ["on", "off"],
+      "default": "on"
+    },
+    "jev_router_escalate_after": {
+      "type": "number",
+      "title": "Router: errors before escalating",
+      "description": "Failed edits in one subagent after which the next subagent for its files starts a model up. Empty means 3.",
+      "min": 1
+    },
+    "jev_router_init_model": {
+      "type": "string",
+      "title": "Router: rules writer model",
+      "description": "Model that drafts rules.json during /jev-route init. Empty means sonnet."
+    }
+  }
+}
