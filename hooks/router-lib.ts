@@ -11,6 +11,10 @@ export const DEFAULT_INIT_MODEL = 'sonnet';
 export const MODEL_GONE = new Set<string>(['model_not_found', 'invalid_request', 'oauth_org_not_allowed']);
 export const DELETE_COMMANDS = new Set(['rm', 'rmdir', 'del', 'erase', 'unlink', 'remove-item', 'ri', 'mv', 'move', 'move-item']);
 
+/** The routing files Claude may edit itself while routing is on (project-relative). */
+export const RULES_FILES = ['.optim-jev/jev_router/rules.json', '.optim-jev/jev_router/RULES.md'];
+export const isRulesFile = (rel: string) => RULES_FILES.some((f) => f.toLowerCase() === rel.toLowerCase());
+
 export type Mode = (typeof MODES)[number];
 export type Permission = { write: string[]; delete: string[] };
 export type RenderAnswer = {
@@ -32,7 +36,7 @@ export type TurnState = {
 
 export const USAGE = [
   'Usage: /jev-route [on | off]',
-  '       /jev-route init [--depth N] ["what matters in this project"]',
+  '       /jev-route init [--depth N] [--force] ["what matters in this project"]',
   '       /jev-route why | stats',
 ].join('\n');
 

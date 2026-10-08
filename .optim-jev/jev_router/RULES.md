@@ -5,13 +5,14 @@ a `## <path>` section is sent only when a planned file is under that path.
 
 ## General
 
-- Repo holds a nested second plugin, fast-jev-compaction/, with its own package.json, tsconfig and tests.
-- Router logic exists in both TypeScript (hooks/) and Python (src/optim_jev/); tests exist for each in tests/.
+- Ignore the .optim-jev directory: it holds runtime logs and generated rules, not source.
+- Documentation work (README, PERFORMANCE_METRICS.md, docs, comments) must be done only by sonnet or haiku, never opus.
+- .env may hold secrets; never read, edit or print it.
 
-## .env
+## hooks/
 
-- Environment secrets file; never print or commit its contents.
+- hooks/optim-jev.ts talks to the Python tools in src/optim_jev/tools/ via one JSON request on stdin and one JSON answer on stdout; keep both sides' schemas in sync.
 
-## hooks/hooks.json
+## src/optim_jev/
 
-- Minimal manifest; the commented documentation lives in hooks/hooks.reference.jsonc, since plain JSON cannot hold comments.
+- Each tool's tool.py is a bridge to hooks/optim-jev.ts; changing request or answer shapes requires updating the hook and tests/.

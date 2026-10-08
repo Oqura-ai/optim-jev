@@ -4,7 +4,8 @@
 
 render     {session_model}                       -> {section, rules, tiers, current, has_rules}
 spawn      {session_id, session_model, description, prompt, escalated} -> {model, files, appendix, toast, jev_failed}
-scan       {session_model, directive, depth}     -> {system, prompt, paths, models}
+scan       {session_model, directive, depth, force} -> {system, prompt, paths, models} | {refused}
+validate   {}                                    -> {problems}
 init_save  {session_model, directive, depth, reply, checks} -> {text, rules, count}
 outcome    {session_id, record}                  -> {}
 why        {session_id}                          -> {text}
@@ -102,12 +103,19 @@ def spawn_mode(request: dict[str, Any]) -> dict[str, Any]:
 
 
 def scan_mode(request: dict[str, Any]) -> dict[str, Any]:
-    config, _, ladder = _context(request)
+    config, rules, ladder = _context(request)
+    if rules.paths and not request.get("force"):
+        return {
+            "refused": f"jev-router: this project already has {len(rules.paths)} rule(s). Ask Claude to change them, "
+            "or run /jev-route init --force to draft them again (rules.json and RULES.md are kept as *.bak)."
+        }
     depth = int(request.get("depth") or config.depth)
     entries = scan_mod.scan(request["project_dir"], depth)
     return {
         "system": writer.system_prompt(depth, ladder),
-        "prompt": writer.user_prompt(entries, str(request.get("directive") or ""), ladder),
+        "prompt": writer.user_prompt(
+            entries, str(request.get("directive") or ""), ladder, scan_mod.digest(request["project_dir"])
+        ),
         "paths": len(entries),
         # Every catalog model, unavailable ones too, so a re-init checks them again.
         "models": [{"alias": m.alias, "id": m.id} for m in load_catalog(request["project_dir"])],
@@ -150,6 +158,12 @@ def init_save_mode(request: dict[str, Any]) -> dict[str, Any]:
     return {"text": text, "rules": _rules_table(rules), "count": len(rules.paths)}
 
 
+def validate_mode(request: dict[str, Any]) -> dict[str, Any]:
+    project = request["project_dir"]
+    known = tuple(reversed([m.alias for m in load_catalog(project)]))
+    return {"problems": rules_mod.validate(project, known)}
+
+
 def outcome_mode(request: dict[str, Any]) -> dict[str, Any]:
     record = request.get("record")
     if isinstance(record, dict):
@@ -173,6 +187,7 @@ HANDLERS = {
     "render": render_mode,
     "spawn": spawn_mode,
     "scan": scan_mode,
+    "validate": validate_mode,
     "init_save": init_save_mode,
     "outcome": outcome_mode,
     "why": why_mode,

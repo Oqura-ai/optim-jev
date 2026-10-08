@@ -79,8 +79,17 @@ def _models(raw: Any, known: tuple[str, ...]) -> tuple[str, ...] | None:
     return tuple(a for a in known if a in raw)
 
 
+def _from_min(level: Any, known: tuple[str, ...]) -> tuple[str, ...] | None:
+    """`"min": "<model>"`: that model and every stronger one (`known` is weakest first); `"none"`: no model."""
+    if level == "none":
+        return ()
+    return known[known.index(level):] if isinstance(level, str) and level in known else None
+
+
 def parse(data: Any, known: tuple[str, ...]) -> Rules:
-    """Rules from JSON data; unknown models, bad entries and overlong text are dropped or cut."""
+    """Rules from JSON data; unknown models, bad entries and overlong text are dropped or cut.
+
+    An entry gives `write` as a list of models or `min` as one; `delete` is a list and defaults to `write`."""
     if not isinstance(data, dict):
         return Rules({})
     paths: dict[str, Rule] = {}
@@ -89,6 +98,8 @@ def parse(data: Any, known: tuple[str, ...]) -> Rules:
         if not isinstance(path, str) or not path.strip() or not isinstance(entry, dict):
             continue
         write = _models(entry.get("write"), known)
+        if write is None:
+            write = _from_min(entry.get("min"), known)
         if write is None:
             continue
         delete = _models(entry.get("delete"), known)
@@ -143,6 +154,44 @@ def write_atomic(path: Path, text: str) -> None:
     except BaseException:
         Path(tmp).unlink(missing_ok=True)
         raise
+
+
+def validate(project_dir: str | os.PathLike[str], known: tuple[str, ...]) -> list[str]:
+    """What is wrong with rules.json as written. `parse` drops bad parts silently, and a file that is not
+    JSON reads as no rules at all, so a typo can open every path or lock one: this names each problem."""
+    try:
+        text = (router_dir(project_dir) / RULES_FILE).read_text(encoding="utf-8")
+    except FileNotFoundError:
+        return []
+    except OSError as err:
+        return [f"rules.json cannot be read: {err}"]
+    try:
+        data = json.loads(text)
+    except ValueError as err:
+        return [f"rules.json is not valid JSON ({err}); until it is fixed every path is open to every model"]
+    raw_paths = data.get("paths") if isinstance(data, dict) else None
+    if not isinstance(raw_paths, dict):
+        return ['rules.json has no "paths" object; until it has, every path is open to every model']
+    models = ", ".join(known)
+    problems: list[str] = []
+    for path, entry in raw_paths.items():
+        if not isinstance(entry, dict):
+            problems.append(f'"{path}": not an object, so ignored')
+            continue
+        for field in ("write", "delete"):
+            raw = entry.get(field)
+            if raw is None:
+                continue
+            if not isinstance(raw, list):
+                problems.append(f'"{path}": "{field}" must be a list of models ({models}), so ignored')
+                continue
+            unknown = [str(m) for m in raw if m not in known]
+            if unknown:
+                note = "; as written no model may " + field + " there" if len(unknown) == len(raw) else ""
+                problems.append(f'"{path}": unknown model(s) in "{field}": {", ".join(unknown)} (use {models}){note}')
+        if "write" not in entry and _from_min(entry.get("min"), known) is None:
+            problems.append(f'"{path}": needs "write" (a list of models) or "min" (one of {models}, none); the rule is ignored')
+    return problems
 
 
 def save(project_dir: str | os.PathLike[str], rules: Rules) -> Path:

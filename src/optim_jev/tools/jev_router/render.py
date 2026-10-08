@@ -10,7 +10,8 @@ from .catalog import Ladder
 from .rules import Rule
 
 INSTRUCTION = (
-    "You cannot edit, write or delete files yourself; those calls are refused. Make every file change "
+    "You cannot edit, write or delete files yourself; those calls are refused (the two routing files "
+    "described below are the exception). Make every file change "
     "through the Agent tool. Jev, a model router, reads each subagent's prompt and runs it on the "
     "cheapest model that will do it correctly, so write prompts that stand alone: the goal, the exact "
     "file paths to change, and what done looks like. Give unrelated changes their own subagents so "
@@ -43,8 +44,26 @@ def ladder_lines(ladder: Ladder) -> list[str]:
     return lines
 
 
+def maintenance(ladder: Ladder) -> str:
+    """How to keep the two routing files current; static text, so the prompt cache keeps it."""
+    return (
+        "Routing preferences live in two files you may edit yourself (read one before changing it). When the "
+        "person changes a preference, update the right one:\n"
+        '- .optim-jev/jev_router/rules.json: which models may write or delete where, as {"paths": {"src/": '
+        '{"write": [models], "delete": [models], "why": "what this area is"}}}. '
+        f"Models are {', '.join(ladder.ascending)}, weakest first. "
+        '"min": "<model>" may stand in for "write": that model and every stronger one; "min": "none": no model. '
+        "A path with no entry is open to every model.\n"
+        "- .optim-jev/jev_router/RULES.md: unconventional facts a path rule cannot express, as bullets under "
+        "`## General` (all tasks) or `## <path>` (tasks touching it).\n"
+        "Choose by one test: a preference that names a path is a rules.json entry; one about a kind of work, or a "
+        "fact about the codebase, is a RULES.md bullet. Never write it in both. Change these files only when the "
+        "person asks, never to get past a refused write."
+    )
+
+
 def section(ladder: Ladder) -> str:
-    return "\n".join(["## optim-jev model router", INSTRUCTION, "", *ladder_lines(ladder)])
+    return "\n".join(["## optim-jev model router", INSTRUCTION, "", maintenance(ladder), "", *ladder_lines(ladder)])
 
 
 def rule_rows(rows: list[Rule], ladder: Ladder) -> list[str]:

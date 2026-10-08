@@ -1,4 +1,73 @@
 {
   "schema": 1,
-  "paths": {}
+  "paths": {
+    ".claude-plugin/": {
+      "write": [
+        "haiku",
+        "sonnet",
+        "opus"
+      ],
+      "why": "plugin and marketplace manifests; small but breaking if malformed"
+    },
+    ".env": {
+      "write": [],
+      "why": "local environment secrets; never edit"
+    },
+    "PERFORMANCE_METRICS.md": {
+      "write": [],
+      "why": "performance metrics documentation guide"
+    },
+    "README.md": {
+      "write": [],
+      "why": "project documentation"
+    },
+    "hooks/": {
+      "write": [
+        "haiku",
+        "sonnet",
+        "opus"
+      ],
+      "why": "TypeScript Claude Code hooks driving routing and compaction; moderately subtle"
+    },
+    "hooks/optim-jev.ts": {
+      "write": [
+        "haiku",
+        "sonnet",
+        "opus"
+      ],
+      "why": "main hook entry; large, compaction and routing flow, subtle"
+    },
+    "hooks/router-lib.ts": {
+      "write": [
+        "haiku",
+        "sonnet",
+        "opus"
+      ],
+      "why": "routing engine types and turn state; subtle invariants"
+    },
+    "src/": {
+      "write": [
+        "haiku",
+        "sonnet",
+        "opus"
+      ],
+      "why": "Python package source for the tools"
+    },
+    "src/optim_jev/": {
+      "write": [
+        "haiku",
+        "sonnet",
+        "opus"
+      ],
+      "why": "core logs, pricing, and the compacter, router, skills tools; feature work"
+    },
+    "tests/": {
+      "write": [
+        "haiku",
+        "sonnet",
+        "opus"
+      ],
+      "why": "unit tests for router and skills in TS and Python; mechanical"
+    }
+  }
 }

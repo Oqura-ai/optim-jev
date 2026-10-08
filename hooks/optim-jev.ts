@@ -29,6 +29,7 @@ import {
   newTurn,
   numberOption,
   oneOf,
+  isRulesFile,
   relPath,
   writeTargets,
 } from './router-lib';
@@ -335,16 +336,22 @@ async function checkModel(
 async function runInit($: Engine, arg: string): Promise<CommandRunResult> {
   const depthMatch = /--depth[ =](\d+)/.exec(arg);
   const depth = depthMatch ? Number(depthMatch[1]) : undefined;
-  const directive = arg.replace(/--depth[ =]\d+/, '').trim().replace(/^["']|["']$/g, '');
+  const force = /(^|\s)--force(?=\s|$)/.test(arg);
+  const directive = arg
+    .replace(/--depth[ =]\d+/, '')
+    .replace(/(^|\s)--force(?=\s|$)/, ' ')
+    .trim()
+    .replace(/^["']|["']$/g, '');
   $.ui.status('◆ jev · scanning…');
   const base = await routerFields($);
-  const scan = await runTool<{ system: string; prompt: string; paths: number; models: { alias: string; id: string }[] }>(
-    $,
-    routerOptions,
-    ROUTER_MODULE,
-    'scan',
-    { ...base, directive, depth },
-  );
+  const scan = await runTool<
+    | { refused: string }
+    | { refused?: undefined; system: string; prompt: string; paths: number; models: { alias: string; id: string }[] }
+  >($, routerOptions, ROUTER_MODULE, 'scan', { ...base, directive, depth, force });
+  if (scan.refused !== undefined) {
+    $.ui.status(idleStatus());
+    return { text: scan.refused };
+  }
   $.ui.status('◆ jev · checking model access…');
   const checks = Object.fromEntries(
     await Promise.all(scan.models.map(async (m) => [m.alias, await checkModel($, m.alias, m.id, base.session_model)] as const)),
@@ -388,7 +395,10 @@ async function guardWrite(
   if (!isActive()) return { watched: false };
   const { paths, kind } = writeTargets(e);
   if (paths.length === 0) return { watched: false };
+  const root = await $.session.root();
   if (e.agentId === undefined) {
+    // The two routing files are the one thing the main loop may change: that is how preferences evolve.
+    if (kind === 'write' && paths.every((p) => isRulesFile(relPath(p, root)))) return { watched: false };
     turn.deniedCount += 1;
     return {
       watched: false,
@@ -399,7 +409,6 @@ async function guardWrite(
   }
   const running = agentModels.get(e.agentId);
   if (!running) return { watched: false };
-  const root = await $.session.root();
   for (const target of paths) {
     const rel = relPath(target, root);
     const permission = lookup(rules, rel, tiers);
@@ -417,6 +426,33 @@ async function guardWrite(
     };
   }
   return { watched: true };
+}
+
+async function editedRulesFile($: Engine, e: Record<string, unknown>): Promise<boolean> {
+  const { paths, kind } = writeTargets(e);
+  if (kind !== 'write' || paths.length === 0) return false;
+  const root = await $.session.root();
+  return paths.some((p) => isRulesFile(relPath(p, root)));
+}
+
+/** A routing file changed: reload the copy guardWrite checks, and report what a hand edit broke. */
+async function afterRulesEdit($: Engine): Promise<string | undefined> {
+  await refresh($);
+  try {
+    const { problems } = await runTool<{ problems: string[] }>(
+      $,
+      routerOptions,
+      ROUTER_MODULE,
+      'validate',
+      await routerFields($),
+    );
+    if (problems.length === 0) return undefined;
+    notify($, `⚠ jev: rules.json has ${problems.length} problem(s); Claude was told`, 10_000);
+    return `jev-router: rules.json has problems. Fix them now.\n${problems.map((p) => `- ${p}`).join('\n')}`;
+  } catch (error) {
+    $.ui.log(`jev-router: rules.json not validated (${errorText(error)})`, { to: 'debug' });
+    return undefined;
+  }
 }
 
 function countWriteResult($: Engine, agentId: string | undefined, isError: boolean) {
@@ -503,11 +539,14 @@ function registerRouter(on: On, pluginOptions: PluginOptions): void {
   });
 
   on('tool.call', { tool: ['Edit', 'Write', 'NotebookEdit', 'Bash', 'PowerShell'] }, async ($, e, next) => {
-    const verdict = await guardWrite($, e as unknown as Record<string, unknown> & { agentId?: string });
+    const input = e as unknown as Record<string, unknown> & { agentId?: string };
+    const verdict = await guardWrite($, input);
     if (verdict.deny !== undefined) return { deny: verdict.deny };
     const result = await next(e);
     if (verdict.watched) countWriteResult($, e.agentId, result.isError === true);
-    return result;
+    if (result.deny !== undefined || result.isError === true || !(await editedRulesFile($, input))) return result;
+    const warning = await afterRulesEdit($);
+    return warning ? { ...result, context: [...(result.context ?? []), warning] } : result;
   });
 
   on('agent.spawn', async ($, e, next) => {
