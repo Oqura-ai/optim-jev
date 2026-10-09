@@ -18,6 +18,8 @@ const SPAWN = {
   files: ['src/api/a.py'],
   appendix: '\n\n---\noptim-jev router: you run on haiku.\nCodebase context (RULES.md):\n- keep handlers thin',
   toast: 'jev · oauth handler → haiku',
+  source: 'jev',
+  escalated: 0,
   jev_failed: null,
 };
 
@@ -39,6 +41,7 @@ function engine(on: On, failTools = false) {
   on('settings.read', () => ({ value: {} }));
   on('command.register', (_$, e) => ({ value: { command: e.name } }));
   on('ui.status', () => ({ value: undefined }));
+  on('ui.invalidate', () => ({ value: undefined }));
   on('ui.toast', () => ({ value: undefined }));
   on('ui.log', () => ({ value: undefined }));
   on('session.start', (_$, e) => ({ cwd: e.cwd }));

@@ -2,7 +2,7 @@
 
 ## Project Structure & Module Organization
 
-`src/optim_jev/` contains the Python implementation. Shared utilities live in `core/`; each feature is isolated under `tools/jev_compacter`, `tools/jev_router`, or `tools/jev_skills`. Keep decisions and policy in Python so they remain easy to test. `hooks/optim-jev.ts` is the thin Claude Code integration layer, with shared TypeScript helpers in `hooks/router-lib.ts`. Python tests are named `tests/test_*.py`; Claude Code integration tests use `tests/*.test.ts`. Documentation belongs in `docs/`, plugin metadata in `.claude-plugin/`, and committed images in `assets/`.
+`src/optim_jev/` contains the Python implementation. Shared utilities live in `core/`; each feature is isolated under `tools/jev_compacter`, `tools/jev_router`, or `tools/jev_skills`. Keep decisions and policy in Python so they remain easy to test. `hooks/optim-jev.ts` is the thin Claude Code integration layer, with shared TypeScript helpers in `hooks/router-lib.ts` and the AbovePrompt dashboard in `hooks/dashboard.tsx`. Python tests are named `tests/test_*.py`; Claude Code integration tests use `tests/*.test.ts`. Documentation belongs in `docs/`, plugin metadata in `.claude-plugin/`, and committed images in `assets/`.
 
 ## Build, Test, and Development Commands
 

@@ -17,6 +17,7 @@ function engine(on: On) {
   on('tool.list', () => ({ value: [{ name: 'ListSkills', description: '' }] }));
   on('command.register', (_$, e) => ({ value: { command: e.name } }));
   on('ui.status', () => ({ value: undefined }));
+  on('ui.invalidate', () => ({ value: undefined }));
   on('ui.toast', () => ({ value: undefined }));
   on('ui.log', () => ({ value: undefined }));
   on('session.start', (_$, e) => ({ cwd: e.cwd }));

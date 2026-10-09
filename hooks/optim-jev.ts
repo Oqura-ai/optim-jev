@@ -14,6 +14,16 @@ import type {
   SessionMessage,
   TurnCompleteInput,
 } from 'claude-code';
+import {
+  DASHBOARD_STAR_FRAME_MS,
+  DASHBOARD_STAR_ROWS,
+  dashboardStarFrame,
+  dashboardTree,
+  type CompactionOutcome,
+  type DashboardView,
+  type RouterDecision,
+  type SkillsOutcome,
+} from './dashboard';
 import type { Mode, Permission, RenderAnswer, SessionRecord, SpawnAnswer } from './router-lib';
 import {
   DEFAULT_ESCALATE_AFTER,
@@ -48,12 +58,14 @@ type CompactAnswer = {
   log: string[];
   messages?: KeptMessage[];
   tokensAfter?: number;
+  freedTokensEst?: number;
 };
 
 type CheckAnswer = { level: Level | null };
 
 const API_KEY_OPTION = 'typesafe_api_key';
 const PYTHON_TIMEOUT_MS = 180_000;
+const DEFAULT_HARD_PERCENT = 85;
 
 function errorText(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
@@ -223,8 +235,175 @@ const aliasOf = (model: string | undefined | null) =>
   model ? tiers.find((t) => model.toLowerCase().includes(t)) : undefined;
 const bump = (alias: string) => tiers[Math.min(tiers.length - 1, tiers.indexOf(alias) + 1)] ?? alias;
 
-// Set by register from the jev_compacter_mode option; shown on the status line with the router.
+// Dashboard snapshot. Feature state in each tool remains the source of truth.
+const DASHBOARD_STORE_KEY = 'optim_jev_dashboard_session';
+type DashboardRecord = {
+  sessionId: string;
+  contextPercent: number | null;
+  compactionOutcome: CompactionOutcome;
+  compacterDegraded: boolean;
+  routerDecision: RouterDecision | null;
+  routerOffline: boolean;
+  skillsOutcome: SkillsOutcome;
+};
+
+let pluginOptions: PluginOptions = {};
 let compacterOn = true;
+let dashboardOn = true;
+let dashboardSessionId = '';
+let dashboardActivity: string | null = null;
+let dashboardContextPercent: number | null = null;
+let compactionOutcome: CompactionOutcome = { kind: 'not_run' };
+let compacterDegraded = false;
+let routerHasRules = false;
+let routerRefreshingFailed = false;
+let routerRouting = false;
+let lastRouterDecision: RouterDecision | null = null;
+let dashboardStarFrameNumber = 0;
+let dashboardStarRequestId: string | null = null;
+let dashboardStarTimer: { cancel(): void } | null = null;
+let dashboardStarColumns = 1;
+let dashboardSaveQueue: Promise<void> = Promise.resolve();
+
+function dashboardRecord(): DashboardRecord {
+  return {
+    sessionId: dashboardSessionId,
+    contextPercent: dashboardContextPercent,
+    compactionOutcome,
+    compacterDegraded,
+    routerDecision: lastRouterDecision,
+    routerOffline: offline,
+    skillsOutcome,
+  };
+}
+
+function restoreDashboard(stored: Partial<DashboardRecord> | undefined): void {
+  if (!stored || stored.sessionId !== dashboardSessionId) return;
+  if (stored.contextPercent === null || (typeof stored.contextPercent === 'number' && Number.isFinite(stored.contextPercent))) {
+    dashboardContextPercent = stored.contextPercent;
+  }
+  if (stored.compactionOutcome?.kind) compactionOutcome = stored.compactionOutcome;
+  if (typeof stored.compacterDegraded === 'boolean') compacterDegraded = stored.compacterDegraded;
+  if (stored.routerDecision === null || stored.routerDecision?.model) lastRouterDecision = stored.routerDecision;
+  if (typeof stored.routerOffline === 'boolean') offline = stored.routerOffline;
+  if (stored.skillsOutcome?.kind) skillsOutcome = stored.skillsOutcome;
+}
+
+function persistDashboard($: Engine): void {
+  if (!dashboardSessionId) return;
+  const snapshot = dashboardRecord();
+  dashboardSaveQueue = dashboardSaveQueue
+    .catch(() => undefined)
+    .then(async () => {
+      await $.store.set(DASHBOARD_STORE_KEY, snapshot);
+    })
+    .catch((error) => {
+      $.ui.log(`optim-jev: dashboard state not saved (${errorText(error)})`, { to: 'debug' });
+    });
+}
+
+function stopDashboardStars(): void {
+  dashboardStarRequestId = null;
+  dashboardStarTimer?.cancel();
+  dashboardStarTimer = null;
+}
+
+function animateDashboardStars($: Engine, requestId: string, columns: number): void {
+  dashboardStarRequestId = requestId;
+  dashboardStarColumns = columns;
+  if (dashboardStarTimer) return;
+  try {
+    dashboardStarTimer = $.clock.every(DASHBOARD_STAR_FRAME_MS, () => {
+      const active = dashboardStarRequestId;
+      if (!active) return stopDashboardStars();
+      dashboardStarFrameNumber += 1;
+      void $.ui
+        .blit({
+          requestId: active,
+          key: 'dashboard-stars',
+          cells: dashboardStarFrame(dashboardStarFrameNumber, dashboardStarColumns, DASHBOARD_STAR_ROWS),
+        })
+        .then((result) => {
+          if ('deny' in result && result.deny) stopDashboardStars();
+        })
+        .catch(stopDashboardStars);
+    });
+  } catch {
+    // Animation is optional: keep the static particle frame and the dashboard itself.
+    dashboardStarTimer = null;
+  }
+}
+
+function refreshUi($: Engine): void {
+  persistDashboard($);
+  try {
+    if (dashboardOn) {
+      $.ui.status(undefined);
+      $.ui.invalidate('ui.render');
+    } else {
+      $.ui.status(dashboardActivity ? `◆ jev · ${dashboardActivity}` : idleStatus());
+    }
+  } catch (error) {
+    $.ui.log(`optim-jev: dashboard not refreshed (${errorText(error)})`, { to: 'debug' });
+  }
+}
+
+function showActivity($: Engine, activity: string | null): void {
+  dashboardActivity = activity;
+  refreshUi($);
+}
+
+function rememberContext(percent: number): void {
+  dashboardContextPercent = Number.isFinite(percent) ? percent : null;
+}
+
+async function rememberCompactedContext(
+  $: Engine,
+  options: PluginOptions,
+  result: SessionCompactResult,
+  knownWindow = 0,
+): Promise<void> {
+  try {
+    const fields = knownWindow > 0 ? null : await sessionFields($, options);
+    const windowTokens = knownWindow > 0 ? knownWindow : (fields?.usage.window_tokens ?? 0);
+    if (typeof result.tokensAfter === 'number' && windowTokens > 0) {
+      rememberContext((100 * result.tokensAfter) / windowTokens);
+    } else if (fields && (fields.percent > 0 || dashboardContextPercent === null)) {
+      rememberContext(fields.percent);
+    }
+  } catch {
+    // The exact outcome remains useful even when usage is temporarily unavailable.
+  }
+}
+
+function dashboardView(): DashboardView {
+  return {
+    contextPercent: dashboardContextPercent,
+    activity: dashboardActivity,
+    compacter: {
+      enabled: compacterOn,
+      softPercent: numberOption(pluginOptions, 'jev_compacter_soft_percent', DEFAULT_SOFT_PERCENT),
+      hardPercent: numberOption(pluginOptions, 'jev_compacter_hard_percent', DEFAULT_HARD_PERCENT),
+      outcome: compactionOutcome,
+      degraded: compacterDegraded,
+    },
+    router: {
+      mode: record.mode,
+      routing: routerRouting,
+      offline: offline || routerRefreshingFailed,
+      hasRules: routerHasRules,
+      decision: lastRouterDecision,
+    },
+    skills: {
+      mode: skills.mode,
+      scope: skills.scope,
+      count: skillCount,
+      indexing: skillsIndexing,
+      picking: skillsPicking,
+      outcome: skillsOutcome,
+    },
+  };
+}
 
 function idleStatus(): string {
   const router = !isActive()
@@ -255,11 +434,14 @@ async function refresh($: Engine) {
     rules = answer.rules;
     tiers = answer.tiers.length > 0 ? answer.tiers : tiers;
     sessionAlias = answer.current;
+    routerHasRules = answer.has_rules;
+    routerRefreshingFailed = false;
   } catch (error) {
     section = '';
+    routerRefreshingFailed = true;
     $.ui.log(`jev-router: could not render its prompt section (${errorText(error)})`);
   }
-  $.ui.status(idleStatus());
+  refreshUi($);
 }
 
 async function setMode($: Engine, mode: Mode) {
@@ -307,7 +489,8 @@ async function runCommand($: Engine, e: CommandRunInput): Promise<CommandRunResu
     if (verb === 'init') return await runInit($, arg);
     return { text: USAGE };
   } catch (error) {
-    $.ui.status(idleStatus());
+    dashboardActivity = null;
+    refreshUi($);
     return { text: `jev-router: ${errorText(error)}` };
   }
 }
@@ -342,21 +525,21 @@ async function runInit($: Engine, arg: string): Promise<CommandRunResult> {
     .replace(/(^|\s)--force(?=\s|$)/, ' ')
     .trim()
     .replace(/^["']|["']$/g, '');
-  $.ui.status('◆ jev · scanning…');
+  showActivity($, 'Scanning project for router rules…');
   const base = await routerFields($);
   const scan = await runTool<
     | { refused: string }
     | { refused?: undefined; system: string; prompt: string; paths: number; models: { alias: string; id: string }[] }
   >($, routerOptions, ROUTER_MODULE, 'scan', { ...base, directive, depth, force });
   if (scan.refused !== undefined) {
-    $.ui.status(idleStatus());
+    showActivity($, null);
     return { text: scan.refused };
   }
-  $.ui.status('◆ jev · checking model access…');
+  showActivity($, 'Checking model access…');
   const checks = Object.fromEntries(
     await Promise.all(scan.models.map(async (m) => [m.alias, await checkModel($, m.alias, m.id, base.session_model)] as const)),
   );
-  $.ui.status(`◆ jev · writing rules for ${scan.paths} paths…`);
+  showActivity($, `Writing router rules for ${scan.paths} paths…`);
   const reply = await $.model.complete({
     model: initModel,
     system: scan.system,
@@ -366,7 +549,7 @@ async function runInit($: Engine, arg: string): Promise<CommandRunResult> {
   });
   if (reply.usage) recordUsage('init', reply.usage, { model: initModel });
   if (!reply.isAnswered) {
-    $.ui.status(idleStatus());
+    showActivity($, null);
     return { text: `jev-router: the rules writer (${initModel}) gave no answer (${reply.reason})` };
   }
   const saved = await runTool<{ text: string; count: number }>($, routerOptions, ROUTER_MODULE, 'init_save', {
@@ -376,6 +559,7 @@ async function runInit($: Engine, arg: string): Promise<CommandRunResult> {
     reply: reply.text,
     checks,
   });
+  dashboardActivity = null;
   const turnedOn = !isActive();
   if (turnedOn) await setMode($, 'on');
   else await refresh($);
@@ -470,7 +654,8 @@ function countWriteResult($: Engine, agentId: string | undefined, isError: boole
 
 async function routeSpawn($: Engine, e: AgentSpawnInput): Promise<{ model?: string; prompt?: string; files: string[] }> {
   if (!isActive() || e.fork || e.isTeammate) return { files: [] };
-  $.ui.status('◆ jev · routing subagent…');
+  routerRouting = true;
+  showActivity($, `Routing “${e.description || 'subagent'}”…`);
   try {
     const answer = await runTool<SpawnAnswer>($, routerOptions, ROUTER_MODULE, 'spawn', {
       ...(await routerFields($)),
@@ -480,14 +665,27 @@ async function routeSpawn($: Engine, e: AgentSpawnInput): Promise<{ model?: stri
     });
     offline = answer.jev_failed !== null;
     turn.spawned += 1;
+    lastRouterDecision = {
+      task: e.description || 'subagent',
+      model: answer.model,
+      source: answer.source ?? (answer.jev_failed ? 'fallback' : 'jev'),
+      escalated: answer.escalated ?? 0,
+    };
     notify($, answer.toast, 6_000);
-    $.ui.status(idleStatus());
     return { model: answer.model, prompt: answer.appendix ? e.prompt + answer.appendix : undefined, files: answer.files };
   } catch (error) {
     offline = true;
+    lastRouterDecision = {
+      task: e.description || 'subagent',
+      model: sessionAlias ?? 'session',
+      source: 'session',
+      escalated: 0,
+    };
     $.ui.log(`jev-router: subagent not routed (${errorText(error)})`, { to: 'debug' });
-    $.ui.status(idleStatus());
     return { files: [] };
+  } finally {
+    routerRouting = false;
+    showActivity($, null);
   }
 }
 
@@ -510,7 +708,7 @@ async function routerTurnComplete($: Engine, e: TurnCompleteInput) {
       $.ui.log(`jev-router: outcome not logged (${errorText(error)})`, { to: 'debug' });
     }
   }
-  $.ui.status(idleStatus());
+  refreshUi($);
 }
 
 /**
@@ -598,6 +796,9 @@ let skillDirs: string[] = [];
 let skillCount = 0;
 let lastPicks: string[] = [];
 let listingNote = '';
+let skillsIndexing = false;
+let skillsPicking = false;
+let skillsOutcome: SkillsOutcome = { kind: 'not_run', picks: [] };
 
 const skillsOn = () => skills.mode === 'on';
 const normPath = (p: string) => p.replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase();
@@ -618,14 +819,22 @@ async function skillsFields($: Engine) {
 async function reindex($: Engine) {
   if (!skillsOn()) {
     skillDirs = [];
+    skillsIndexing = false;
     return;
   }
+  skillsIndexing = true;
+  showActivity($, `Indexing ${skills.scope} skills…`);
   try {
     const answer = await runTool<{ count: number; dirs: string[] }>($, skillsOptions, SKILLS_MODULE, 'index', await skillsFields($));
     skillCount = answer.count;
     skillDirs = answer.dirs.map(normPath);
+    if (skillsOutcome.kind === 'unavailable') skillsOutcome = { kind: 'not_run', picks: [] };
   } catch (error) {
+    skillsOutcome = { kind: 'unavailable', picks: [] };
     $.ui.log(`jev-skills: could not index skills (${errorText(error)})`);
+  } finally {
+    skillsIndexing = false;
+    showActivity($, null);
   }
 }
 
@@ -651,6 +860,13 @@ async function skillsSessionStart($: Engine) {
   await reindex($);
 }
 
+async function updateSkills($: Engine, change: Partial<Pick<SkillsRecord, 'mode' | 'scope'>> = {}): Promise<void> {
+  skills = { ...skills, ...change };
+  await $.store.set(SKILLS_STORE_KEY, skills);
+  await reindex($);
+  refreshUi($);
+}
+
 async function runSkillsCommand($: Engine, e: CommandRunInput): Promise<CommandRunResult> {
   const [verb = '', arg = ''] = e.args.trim().split(/\s+/).filter(Boolean);
   try {
@@ -658,13 +874,12 @@ async function runSkillsCommand($: Engine, e: CommandRunInput): Promise<CommandR
     if ((SKILLS_MODES as readonly string[]).includes(verb) || verb === 'scope' || verb === 'reindex') {
       if (verb === 'scope') {
         if (!(SKILLS_SCOPES as readonly string[]).includes(arg)) return { text: SKILLS_USAGE };
-        skills = { ...skills, scope: arg as SkillsRecord['scope'] };
+        await updateSkills($, { scope: arg as SkillsRecord['scope'] });
       } else if (verb !== 'reindex') {
-        skills = { ...skills, mode: verb as SkillsRecord['mode'] };
+        await updateSkills($, { mode: verb as SkillsRecord['mode'] });
+      } else {
+        await updateSkills($);
       }
-      await $.store.set(SKILLS_STORE_KEY, skills);
-      await reindex($);
-      $.ui.status(idleStatus());
       const extra =
         skillsOn() && skills.scope === 'global'
           ? `\nClaude may read files in ${skillDirs.length} skill folder(s) outside the project without asking.`
@@ -700,7 +915,8 @@ async function shortlistFor($: Engine, e: PromptSubmitInput): Promise<string | u
   const kind = e.origin.kind;
   if (!skillsOn() || skillCount === 0 || (kind !== 'composer' && kind !== 'bridge')) return undefined;
   if (text.startsWith('/') || text.length < 12 || FOLLOW_UP.test(text)) return undefined;
-  $.ui.status(`◆ jev · picking skills (${skillCount})…`);
+  skillsPicking = true;
+  showActivity($, `Picking skills from ${skillCount}…`);
   try {
     const answer = await runTool<{ picks: string[]; context: string; failed: string | null }>(
       $,
@@ -711,13 +927,19 @@ async function shortlistFor($: Engine, e: PromptSubmitInput): Promise<string | u
       SKILLS_TIMEOUT_MS,
     );
     lastPicks = answer.picks;
+    skillsOutcome = {
+      kind: answer.failed ? 'jev_offline' : answer.picks.length > 0 ? 'picked' : 'none',
+      picks: answer.picks,
+    };
     if (answer.picks.length > 0) notify($, `jev skills · ${answer.picks.join(', ')}`, 6_000);
     return answer.context || undefined;
   } catch (error) {
+    skillsOutcome = { kind: 'unavailable', picks: [] };
     $.ui.log(`jev-skills: no shortlist (${errorText(error)})`, { to: 'debug' });
     return undefined;
   } finally {
-    $.ui.status(idleStatus());
+    skillsPicking = false;
+    showActivity($, null);
   }
 }
 
@@ -801,31 +1023,37 @@ async function recordSummary(
 
 async function autoCompact($: Engine, options: PluginOptions): Promise<void> {
   checking = true;
+  showActivity($, 'Checking context…');
   try {
     const fields = await sessionFields($, options);
+    rememberContext(fields.percent);
     const soft = options['jev_compacter_soft_percent'];
     if (fields.percent >= (typeof soft === 'number' ? soft : DEFAULT_SOFT_PERCENT)) {
       const { percent: _percent, ...request } = fields;
       const { level } = await runTool<CheckAnswer>($, options, TOOL_MODULE, 'check', request);
+      compacterDegraded = false;
       if (level) {
         pendingLevel = level;
         await $.session.compact();
       }
     }
   } catch (error) {
+    compacterDegraded = true;
+    compactionOutcome = { kind: 'skipped' };
     $.ui.log(`jev-compacter: auto-compaction check skipped (${errorText(error)})`);
   } finally {
     pendingLevel = null;
     checking = false;
+    showActivity($, null);
   }
 }
 
 export const register: Register = (on: On, options: PluginOptions) => {
+  pluginOptions = options;
   compacterOn = options['jev_compacter_mode'] !== 'off';
+  dashboardOn = options['jev_dashboard_mode'] !== 'off';
   registerRouter(on, options);
   registerSkills(on, options);
-
-  let lastMessage = '';
 
   on('command.run', { command: 'jev-compact' }, async ($, e) => {
     if (e.args.trim() !== 'stats') return { text: 'Usage: /jev-compact stats' };
@@ -839,6 +1067,22 @@ export const register: Register = (on: On, options: PluginOptions) => {
   });
 
   on('session.start', async ($, e, next) => {
+    stopDashboardStars();
+    dashboardSessionId = await $.session.id();
+    dashboardActivity = null;
+    dashboardContextPercent = null;
+    compactionOutcome = { kind: 'not_run' };
+    compacterDegraded = false;
+    lastRouterDecision = null;
+    offline = false;
+    routerHasRules = false;
+    routerRefreshingFailed = false;
+    routerRouting = false;
+    lastPicks = [];
+    skillsIndexing = false;
+    skillsPicking = false;
+    skillsOutcome = { kind: 'not_run', picks: [] };
+    restoreDashboard((await $.store.get(DASHBOARD_STORE_KEY)) as Partial<DashboardRecord> | undefined);
     await $.command.register({
       name: 'jev-compact',
       description: "Jev compacter: this session's compactions and what they cost",
@@ -846,7 +1090,13 @@ export const register: Register = (on: On, options: PluginOptions) => {
     });
     await routerSessionStart($);
     await skillsSessionStart($);
-    $.ui.status(idleStatus());
+    try {
+      const livePercent = (await sessionFields($, options)).percent;
+      if (livePercent > 0 || dashboardContextPercent === null) rememberContext(livePercent);
+    } catch {
+      // The dashboard can draw without a context percentage.
+    }
+    refreshUi($);
     return next(e);
   });
 
@@ -854,40 +1104,77 @@ export const register: Register = (on: On, options: PluginOptions) => {
     if (!compacterOn || e.agentId !== undefined || e.trigger === 'precompute') {
       const result = await next(e);
       await recordSummary($, e, result, null);
+      if (e.agentId === undefined && e.trigger !== 'precompute') {
+        await rememberCompactedContext($, options, result);
+        refreshUi($);
+      }
       return result;
     }
     const level: Level =
       e.trigger === 'manual' ? 'manual' : e.trigger === 'auto' ? 'hard' : (pendingLevel ?? 'soft');
     pendingLevel = null;
     const mustShrink = level === 'manual' || level === 'hard';
+    let contextWindow = 0;
+    showActivity($, `Compacting${dashboardContextPercent === null ? '' : ` at ${Math.round(dashboardContextPercent)}%`}…`);
     try {
       const { percent: _percent, ...fields } = await sessionFields($, options);
+      contextWindow = fields.usage.window_tokens;
+      rememberContext((100 * fields.usage.used_tokens) / fields.usage.window_tokens);
+      const messages =
+        Array.isArray(e.messages) && e.messages.length > 0
+          ? e.messages
+          : await $.session.messages().catch(() => []);
       const answer = await runTool<CompactAnswer>($, options, TOOL_MODULE, 'compact', {
         ...fields,
         level,
-        messages: e.messages.map(wire),
+        messages: messages.map(wire),
       });
       for (const line of answer.log) $.ui.log(line, { to: 'debug' });
-      if (answer.message) notify($, (lastMessage = answer.message));
+      if (answer.message) notify($, answer.message);
+      const freedTokens = Math.max(0, answer.freedTokensEst ?? 0);
+      compacterDegraded = answer.message.includes('Jev failed');
       if (answer.action === 'apply' && answer.messages) {
+        compactionOutcome = { kind: 'applied', freedTokensEst: freedTokens };
+        if (answer.tokensAfter !== undefined) {
+          rememberContext((100 * answer.tokensAfter) / fields.usage.window_tokens);
+        }
         return {
-          messages: answer.messages.map((kept) => rebuild(e.messages, kept)),
+          messages: answer.messages.map((kept) => rebuild(messages, kept)),
           tokensBefore: fields.usage.used_tokens,
           tokensAfter: answer.tokensAfter,
         };
       }
-      if (answer.action !== 'summarize') return { skip: answer.message || 'jev-compacter: nothing to compact' };
+      if (answer.action === 'defer') {
+        compactionOutcome = { kind: 'deferred', freedTokensEst: freedTokens };
+        return { skip: answer.message || 'jev-compacter: compaction deferred' };
+      }
+      if (answer.action !== 'summarize') {
+        compactionOutcome = { kind: 'nothing' };
+        return { skip: answer.message || 'jev-compacter: nothing to compact' };
+      }
+      compactionOutcome = { kind: 'builtin' };
     } catch (error) {
+      compacterDegraded = true;
       if (!mustShrink) {
-        notify($, (lastMessage = `jev-compacter: ${errorText(error)}; compaction skipped`));
+        compactionOutcome = { kind: 'skipped' };
+        notify($, `jev-compacter: ${errorText(error)}; compaction skipped`);
         return { skip: `jev-compacter: ${errorText(error)}` };
       }
-      notify($, (lastMessage = `jev-compacter: ${errorText(error)}; falling back to built-in summary`));
+      compactionOutcome = { kind: 'builtin' };
+      notify($, `jev-compacter: ${errorText(error)}; falling back to built-in summary`);
+    } finally {
+      showActivity($, null);
     }
     // Jev's prune wasn't applied and the context must shrink: Claude Code's built-in summary.
-    const result = await next(e);
-    await recordSummary($, e, result, level);
-    return result;
+    showActivity($, 'Using the built-in summary…');
+    try {
+      const result = await next(e);
+      await recordSummary($, e, result, level);
+      await rememberCompactedContext($, options, result, contextWindow);
+      return result;
+    } finally {
+      showActivity($, null);
+    }
   });
 
   on('turn.complete', async ($, e, next) => {
@@ -903,9 +1190,52 @@ export const register: Register = (on: On, options: PluginOptions) => {
     await routerTurnComplete($, e);
     if (e.agentId === undefined) {
       if (compacterOn && !checking) await autoCompact($, options);
+      if (!compacterOn) {
+        try {
+          rememberContext((await sessionFields($, options)).percent);
+          refreshUi($);
+        } catch {
+          // Usage is optional UI data; logging still continues.
+        }
+      }
       // After autoCompact, so a compaction this turn started lands in the same flush.
       await flushUsage($, options);
     }
     return next(e);
+  });
+
+  on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
+    if (!dashboardOn || e.props.hasSurvey) {
+      stopDashboardStars();
+      return next(e);
+    }
+    try {
+      const columns = typeof e.props.bodyColumns === 'number' ? e.props.bodyColumns : 100;
+      const elements = $.ui.resolve(e);
+      if (e.surface === 'terminal' && columns >= 60 && 'Raster' in elements) {
+        animateDashboardStars($, e.requestId, Math.max(1, columns - 4));
+      } else stopDashboardStars();
+      return dashboardTree(
+        elements,
+        dashboardView(),
+        {
+          compact: async () => {
+            try {
+              await $.command.run({ command: 'compact', args: '' });
+            } catch (error) {
+              $.ui.toast(`optim-jev: compact failed (${errorText(error)})`);
+            }
+          },
+          toggleRouter: () => setMode($, isActive() ? 'off' : 'on'),
+          toggleSkills: () => updateSkills($, { mode: skillsOn() ? 'off' : 'on' }),
+        },
+        columns,
+        e.surface === 'terminal',
+        dashboardStarFrameNumber,
+      );
+    } catch (error) {
+      $.ui.log(`optim-jev: dashboard not rendered (${errorText(error)})`, { to: 'debug' });
+      return next(e);
+    }
   });
 };

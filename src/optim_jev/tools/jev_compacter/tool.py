@@ -1,7 +1,8 @@
 """Claude Code bridge: hooks/optim-jev.ts sends one JSON request on stdin, gets one JSON answer.
 
     python -m optim_jev.tools.jev_compacter.tool check    -> {"level": "soft" | "hard" | null}
-    python -m optim_jev.tools.jev_compacter.tool compact  -> {"action", "message", "log", "messages"?}
+    python -m optim_jev.tools.jev_compacter.tool compact
+        -> {"action", "message", "log", "freedTokensEst", "messages"?}
 
 Request fields: session_id, project_dir, usage {used_tokens, window_tokens, idle_seconds}, options
 (the plugin's userConfig; this tool reads the `jev_compacter_` keys), and for `compact` the
@@ -163,7 +164,12 @@ def compact(request: dict[str, Any]) -> dict[str, Any]:
     if outcome.action != "skip":
         store.log_outcome(directory, session_id, _outcome_record(outcome, usage, len(messages), jev))
 
-    answer: dict[str, Any] = {"action": outcome.action, "message": outcome.message, "log": _log(outcome)}
+    answer: dict[str, Any] = {
+        "action": outcome.action,
+        "message": outcome.message,
+        "log": _log(outcome),
+        "freedTokensEst": outcome.freed_tokens,
+    }
     if outcome.action == "apply" and outcome.result is not None:
         answer["messages"] = [
             _wire(source, messages[source], kept)
