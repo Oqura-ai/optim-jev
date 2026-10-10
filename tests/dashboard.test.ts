@@ -2,6 +2,7 @@ import type { AgentSpawnInput, On } from 'claude-code';
 import { describe, expect, test } from 'claude-code/testing';
 import {
   compacterText,
+  dashboardLayout,
   DASHBOARD_STAR_SPACING,
   dashboardStarFrame,
   dashboardStarPoints,
@@ -181,6 +182,91 @@ function spawn(): AgentSpawnInput {
 }
 
 describe('optim-jev dashboard', () => {
+  test('layout respects height as well as width, including zero space', () => {
+    for (const columns of [0, 1, 20, 49, 50, 59, 60, 80, 120, 168]) {
+      for (const rows of [0, 1, 2, 3, 4, 5, 10]) {
+        const layout = dashboardLayout(columns, rows);
+        expect(layout.full).toBe(columns >= 60 && rows >= 5);
+        expect(layout.controls).toBe(columns >= 50 && rows >= 2);
+        expect(layout.width).toBe(columns);
+        expect(layout.rows).toBe(rows);
+      }
+    }
+    expect(dashboardLayout(Number.NaN, Number.POSITIVE_INFINITY)).toMatchObject({ width: 0, rows: 0, full: false });
+    expect(dashboardLayout(-1, -1)).toMatchObject({ width: 0, rows: 0, full: false });
+  });
+
+  test('short terminal band stays compact and preserves the action handlers', { options: { jev_dashboard_mode: 'on' } }, async ($, on) => {
+    const seen = engine(on);
+    await $.session.start(START);
+    const band = await $.ui.mount({
+      plugin: 'optim-jev', surface: 'terminal', component: 'AbovePrompt',
+      props: { hasSurvey: false, isWorking: false, maxRows: 3, bodyColumns: 100,
+        scroll: { offset: 0, bodyRows: 3 }, view: {} },
+    } as never);
+    const text = JSON.stringify(await band.drawn());
+    expect(text).toContain('Ctx 42%');
+    expect(text).toContain('Router off');
+    expect(text).toContain('Skills off');
+    expect(text).not.toContain('dashboard-stars');
+    expect(text).not.toContain('borderStyle');
+    expect(text).toContain('"height":2');
+    await band.press({ key: 'dashboard-router' });
+    await band.redraw();
+    expect(JSON.stringify(await band.drawn())).toContain('Router on');
+    await band.press({ key: 'dashboard-skills' });
+    await band.redraw();
+    expect(JSON.stringify(await band.drawn())).toContain('Skills on');
+    await band.press({ key: 'dashboard-compact' });
+    expect(seen.commands).toContain('compact');
+    await band.unmount();
+  });
+
+  test('terminal render stays valid at the width and height breakpoints', { options: { jev_dashboard_mode: 'on' } }, async ($, on) => {
+    engine(on);
+    await $.session.start(START);
+    for (const columns of [1, 49, 50, 59, 60, 120]) {
+      for (const rows of [1, 2, 4, 5]) {
+        const band = await $.ui.mount({
+          plugin: 'optim-jev', surface: 'terminal', component: 'AbovePrompt',
+          props: { hasSurvey: false, isWorking: false, maxRows: rows, bodyColumns: columns,
+            scroll: { offset: 0, bodyRows: rows }, view: {} },
+        } as never);
+        const text = JSON.stringify(await band.drawn());
+        const layout = dashboardLayout(columns, rows);
+        expect(text.includes('borderStyle')).toBe(layout.full);
+        expect(text.includes('dashboard-stars')).toBe(layout.full);
+        expect(text.includes('dashboard-compact')).toBe(layout.full || layout.controls);
+        expect(text.includes('dashboard-router')).toBe(layout.full || layout.controls);
+        expect(text.includes('dashboard-skills')).toBe(layout.full || layout.controls);
+        if (!layout.full) {
+          expect(text).toContain(`"height":${layout.controls ? 2 : 1}`);
+          expect(text).toContain(`"width":${columns}`);
+          expect(text).toContain('"wrap":"truncate"');
+        }
+        await band.unmount();
+      }
+    }
+  });
+
+  test('a one-row narrow terminal uses a truncated status without buttons', { options: { jev_dashboard_mode: 'on' } }, async ($, on) => {
+    engine(on);
+    await $.session.start(START);
+    const band = await $.ui.mount({
+      plugin: 'optim-jev', surface: 'terminal', component: 'AbovePrompt',
+      props: { hasSurvey: false, isWorking: false, maxRows: 1, bodyColumns: 30,
+        scroll: { offset: 0, bodyRows: 1 }, view: {} },
+    } as never);
+    const text = JSON.stringify(await band.drawn());
+    expect(text).toContain('Ctx 42%');
+    expect(text).toContain('"wrap":"truncate"');
+    expect(text).toContain('"height":1');
+    expect(text).not.toContain('dashboard-actions');
+    expect(text).not.toContain('dashboard-stars');
+    expect(text).not.toContain('borderStyle');
+    await band.unmount();
+  });
+
   test('formatters preserve the useful facts in wide and narrow layouts', () => {
     const state = view();
     expect(compacterText(state)).toContain('Context 42% · soft 60% · hard 85% · freed ~12k');

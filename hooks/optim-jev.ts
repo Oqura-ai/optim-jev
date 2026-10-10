@@ -1211,8 +1211,9 @@ export const register: Register = (on: On, options: PluginOptions) => {
     }
     try {
       const columns = typeof e.props.bodyColumns === 'number' ? e.props.bodyColumns : 100;
+      const maxRows = typeof e.props.maxRows === 'number' ? e.props.maxRows : 5;
       const elements = $.ui.resolve(e);
-      if (e.surface === 'terminal' && columns >= 60 && 'Raster' in elements) {
+      if (e.surface === 'terminal' && columns >= 60 && maxRows >= 5 && 'Raster' in elements) {
         animateDashboardStars($, e.requestId, Math.max(1, columns - 4));
       } else stopDashboardStars();
       return dashboardTree(
@@ -1232,6 +1233,7 @@ export const register: Register = (on: On, options: PluginOptions) => {
         columns,
         e.surface === 'terminal',
         dashboardStarFrameNumber,
+        maxRows,
       );
     } catch (error) {
       $.ui.log(`optim-jev: dashboard not rendered (${errorText(error)})`, { to: 'debug' });

@@ -26,6 +26,14 @@ optim-jev | Context 12% · soft 60% · hard 85% | Router off | Skills off
 
 Its buttons compact now or toggle the router and skill picker. Set **Dashboard** to `off` in `/config` to use the compact status line instead.
 
+The terminal dashboard adapts to both its width and the height Claude allocates
+above the prompt. With at least 60 columns and five rows, it keeps the full card.
+Smaller allocations use a borderless, single-line status, with a second row of
+buttons when at least 50 columns and two rows fit. Long status text is truncated;
+the panel does not add rows for decoration or wrapped controls. With no allocated
+space, it renders nothing. `/compact`, `/jev-route on|off`, and `/jev-skills on|off`
+remain available when buttons do not fit. The desktop layout is unchanged.
+
 ## Set your API key
 
 Use any one of these, checked in this order:

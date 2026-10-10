@@ -204,6 +204,18 @@ type Elements = {
   Svg?: any;
 };
 
+/** The host can reduce AbovePrompt's height independently of terminal width. */
+export function dashboardLayout(columns: number, maxRows = 5) {
+  const width = Number.isFinite(columns) ? Math.max(0, Math.floor(columns)) : 0;
+  const rows = Number.isFinite(maxRows) ? Math.max(0, Math.floor(maxRows)) : 0;
+  return {
+    width,
+    rows,
+    full: width >= 60 && rows >= 5,
+    controls: width >= 50 && rows >= 2,
+  };
+}
+
 export function dashboardTree(
   elements: Elements,
   view: DashboardView,
@@ -211,8 +223,60 @@ export function dashboardTree(
   columns: number,
   terminal = false,
   starFrame = 0,
+  maxRows = 5,
 ) {
   const { Box, Text, Button } = elements;
+  const layout = dashboardLayout(columns, maxRows);
+  // No border or fixed-size decoration when the host cannot fit the five-row card.
+  // Commands remain available when there is no room for buttons.
+  if (terminal && !layout.full) {
+    if (!layout.width || !layout.rows) return null;
+    const percent = view.contextPercent === null ? '?' : `${Math.round(view.contextPercent)}%`;
+    const compact = view.compacter.enabled ? `Ctx ${percent}` : 'Compact off';
+    const router = view.router.mode === 'off'
+      ? 'off' : view.router.routing ? 'routing' : view.router.offline ? 'offline' : 'on';
+    const skills = view.skills.mode === 'off'
+      ? 'off' : view.skills.indexing ? 'indexing' : view.skills.picking ? 'picking' : 'on';
+    const status = `${compact} | Router ${router} | Skills ${skills}`;
+    return (
+      <Box
+        key="optim-jev-dashboard"
+        flexDirection="column"
+        width={layout.width}
+        height={layout.controls ? 2 : 1}
+        overflow="hidden"
+      >
+        <Box height={1} minWidth={0} overflow="hidden">
+          <Text wrap="truncate">{view.activity ? `${status} | ${view.activity}` : status}</Text>
+        </Box>
+        {layout.controls ? (
+          <Box
+            key="dashboard-actions"
+            flexDirection="row"
+            flexWrap="nowrap"
+            gap={1}
+            height={1}
+            minWidth={0}
+            overflow="hidden"
+          >
+            <Button key="dashboard-compact" plain label="Compact" onPress={actions.compact} />
+            <Button
+              key="dashboard-router"
+              plain
+              label={`Router ${view.router.mode}`}
+              onPress={actions.toggleRouter}
+            />
+            <Button
+              key="dashboard-skills"
+              plain
+              label={`Skills ${view.skills.mode}`}
+              onPress={actions.toggleSkills}
+            />
+          </Box>
+        ) : null}
+      </Box>
+    );
+  }
   const narrow = columns > 0 && columns < 90;
   const compactWarning = view.compacter.degraded;
   const routerWarning = view.router.mode === 'on' && view.router.offline;
