@@ -18,11 +18,21 @@ claude plugin marketplace add ./optim-jev
 claude plugin install optim-jev@optim-jev
 ```
 
-Restart Claude Code. On start you should see the status line:
+Restart Claude Code. The dashboard above the prompt shows all three tools, the current context fill, and their latest decisions:
 
 ```
-◆ jev · compact on · router off · skills off
+optim-jev | Context 12% · soft 60% · hard 85% | Router off | Skills off
 ```
+
+Its buttons compact now or toggle the router and skill picker. Set **Dashboard** to `off` in `/config` to use the compact status line instead.
+
+The terminal dashboard adapts to both its width and the height Claude allocates
+above the prompt. With at least 60 columns and five rows, it keeps the full card.
+Smaller allocations use a borderless, single-line status, with a second row of
+buttons when at least 50 columns and two rows fit. Long status text is truncated;
+the panel does not add rows for decoration or wrapped controls. With no allocated
+space, it renders nothing. `/compact`, `/jev-route on|off`, and `/jev-skills on|off`
+remain available when buttons do not fit. The desktop layout is unchanged.
 
 ## Set your API key
 
@@ -43,6 +53,8 @@ Nothing to do. `/compact` and Claude Code's auto-compaction now prune stale cont
 ```
 /jev-compact stats     what compaction cost this session, vs the built-in summary
 ```
+
+Figures marked `(est.)` in `stats` are estimates. Unmarked figures are measured from the session.
 
 ### jev-router: off by default
 
@@ -74,6 +86,7 @@ Set in `/config` under the plugin. All are optional.
 | Option | Default | Effect |
 |---|---|---|
 | `python` | `python` | Python executable used to run the tools |
+| `jev_dashboard_mode` | `on` | `off` hides the dashboard and restores the status line |
 | `jev_compacter_mode` | `on` | `off` returns to Claude Code's built-in summary |
 | `jev_compacter_soft_percent` | 60 | context fill at which pruning is tried after a turn |
 | `jev_compacter_hard_percent` | 85 | fill at which compaction must shrink the context |

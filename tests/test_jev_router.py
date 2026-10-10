@@ -229,6 +229,7 @@ class Spawn(unittest.TestCase):
     def test_spawn_mode_logs_and_returns_the_appendix(self):
         answer = tool.spawn_mode({**self.req, "session_id": "s", "description": "core index", "prompt": "Index src/core/db.py"})
         self.assertEqual(answer["model"], "opus")
+        self.assertEqual((answer["source"], answer["escalated"]), ("rules", 0))
         self.assertIn("prices are integer cents", answer["appendix"])
         self.assertIn("core index → opus", journal.why(journal.read(self.root, "s"), "s"))
         self.assertTrue((Path(self.root) / ".optim-jev" / "logs" / "jev_router" / "s.jsonl").is_file())

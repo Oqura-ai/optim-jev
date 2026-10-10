@@ -3,7 +3,8 @@
     python -m optim_jev.tools.jev_router.tool <mode>
 
 render     {session_model}                       -> {section, rules, tiers, current, has_rules}
-spawn      {session_id, session_model, description, prompt, escalated} -> {model, files, appendix, toast, jev_failed}
+spawn      {session_id, session_model, description, prompt, escalated}
+           -> {model, files, appendix, toast, source, escalated, jev_failed}
 scan       {session_model, directive, depth, force} -> {system, prompt, paths, models} | {refused}
 validate   {}                                    -> {problems}
 init_save  {session_model, directive, depth, reply, checks} -> {text, rules, count}
@@ -98,6 +99,8 @@ def spawn_mode(request: dict[str, Any]) -> dict[str, Any]:
         "files": [f.path for f in result.files],
         "appendix": appendix(result, context, ladder),
         "toast": toast(description, result),
+        "source": result.source,
+        "escalated": result.escalated,
         "jev_failed": result.jev_failed,
     }
 

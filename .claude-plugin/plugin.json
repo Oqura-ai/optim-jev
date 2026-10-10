@@ -2,6 +2,10 @@
   "name": "optim-jev",
   "version": "0.1.0",
   "description": "Jev based token-usage optimization tools for Claude Code workflows.",
+  "author": {
+    "name": "oqura.ai",
+    "url": "https://github.com/Oqura-ai"
+  },
   "license": "MIT",
   "userConfig": {
     "typesafe_api_key": {
@@ -14,6 +18,13 @@
       "type": "string",
       "title": "Python executable",
       "description": "Python 3.10+ used to run the tools, e.g. python, python3 or a full path. Empty means python."
+    },
+    "jev_dashboard_mode": {
+      "type": "string",
+      "title": "Dashboard",
+      "description": "on: show live compacter, router and skill-picker status above the prompt. off: use the compact status line instead.",
+      "options": ["on", "off"],
+      "default": "on"
     },
     "jev_compacter_mode": {
       "type": "string",

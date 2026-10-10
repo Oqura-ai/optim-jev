@@ -1,5 +1,6 @@
 {
   "name": "optim-jev",
+  "description": "Claude Code optimization tools from oqura.ai.",
   "owner": {
     "name": "oqura.ai",
     "url": "https://github.com/Oqura-ai"

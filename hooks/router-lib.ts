@@ -24,7 +24,15 @@ export type RenderAnswer = {
   current: string | null;
   has_rules: boolean;
 };
-export type SpawnAnswer = { model: string; files: string[]; appendix: string; toast: string; jev_failed: string | null };
+export type SpawnAnswer = {
+  model: string;
+  files: string[];
+  appendix: string;
+  toast: string;
+  source: 'jev' | 'rules' | 'fallback';
+  escalated: number;
+  jev_failed: string | null;
+};
 export type SessionRecord = { sessionId: string; mode: Mode };
 export type Escalation = { from: string; to: string; files: string[] };
 export type TurnState = {
