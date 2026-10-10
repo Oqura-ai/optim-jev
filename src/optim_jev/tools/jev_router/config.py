@@ -12,6 +12,8 @@ class RouterConfig:
     # Jev never picks a model above the session's (rules still win).
     cap: str = "on"
     depth: int = 2
+    # Cap on one routing request to Jev (state and questions); past it, Claude decides (see policy).
+    max_input_tokens: int = 4000
     model: str = DEFAULT_MODEL
     base_url: str = SYSTEM_ONE_URL
 

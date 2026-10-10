@@ -12,7 +12,8 @@ export type CompactionOutcome =
 export type RouterDecision = {
   task: string;
   model: string;
-  source: 'jev' | 'rules' | 'fallback' | 'session';
+  effort?: string | null;
+  source: 'jev' | 'rules' | 'escalation' | 'claude' | 'fallback' | 'session';
   escalated: number;
 };
 
@@ -58,7 +59,6 @@ export type DashboardActions = {
 
 const ACCENT = '#d97757';
 const WARNING = '#f0b35f';
-const EDGE = '#513327';
 const BACKGROUND = '#191411';
 export const DASHBOARD_STAR_COLUMNS = 40;
 export const DASHBOARD_STAR_ROWS = 3;
@@ -167,12 +167,13 @@ export function routerText(view: DashboardView, narrow = false): string {
     return 'Router on';
   }
   const up = r.decision.escalated ? ` ↑${r.decision.escalated}` : '';
-  if (narrow) return `Router on → ${title(r.decision.model)}${up}`;
+  const effort = r.decision.effort ? ` · ${r.decision.effort}` : '';
+  if (narrow) return `Router on → ${title(r.decision.model)}${effort}${up}`;
   if (r.decision.source === 'fallback' || r.decision.source === 'session') {
-    return `Router on · ${short(r.decision.task, 22)} → ${title(r.decision.model)} · session model · Jev offline${up}`;
+    return `Router on · ${short(r.decision.task, 22)} → ${title(r.decision.model)}${effort} · session model · Jev offline${up}`;
   }
-  const source = r.decision.source === 'jev' ? 'Jev' : r.decision.source;
-  return `Router on · ${short(r.decision.task, 22)} → ${title(r.decision.model)} via ${source}${up}`;
+  const source = r.decision.source === 'jev' ? 'Jev' : r.decision.source === 'claude' ? 'Claude' : r.decision.source;
+  return `Router on · ${short(r.decision.task, 22)} → ${title(r.decision.model)}${effort} via ${source}${up}`;
 }
 
 export function skillsText(view: DashboardView, narrow = false): string {
@@ -343,7 +344,6 @@ export function dashboardTree(
       overflow="hidden"
       backgroundColor={BACKGROUND}
       borderStyle="round"
-      borderColor={EDGE}
     >
       {desktopStars}
       {terminalStars}

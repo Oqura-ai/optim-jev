@@ -67,16 +67,24 @@ def render_mode(request: dict[str, Any]) -> dict[str, Any]:
 
 
 def spawn_mode(request: dict[str, Any]) -> dict[str, Any]:
+    """A subagent's model and effort. When Jev's input stays over budget, answers `ask_claude` (a prompt)
+    and logs nothing; the hook asks Claude and calls again with `decided`."""
     config, rules, ladder = _context(request)
     project = request["project_dir"]
     description = str(request.get("description") or "")
     prompt = str(request.get("prompt") or "")
-    escalated = request.get("escalated")
-    escalated = {str(k): int(v) for k, v in escalated.items() if isinstance(v, int)} if isinstance(escalated, dict) else {}
+    escalated = request.get("escalated") if isinstance(request.get("escalated"), dict) else {}
+    recent = [str(t) for t in request.get("recent_inputs") or () if isinstance(t, str)]
+    decided = request.get("decided") if isinstance(request.get("decided"), dict) else None
     named = [f.path for f in mentioned_files(f"{description}\n{prompt}", rules, project)]
     context = context_mod.relevant(context_mod.load(project), named)
     jev = _jev(config)
-    result = pick(description, prompt, rules, context, ladder, jev, project, escalated)
+    result = pick(
+        description, prompt, rules, context, ladder, jev, project, escalated,
+        recent=recent, budget=config.max_input_tokens, decided=decided,
+    )
+    if result.ask_claude is not None:
+        return {"ask_claude": result.ask_claude, "reason": result.jev_failed}
     journal.append(
         project,
         str(request.get("session_id") or ""),
@@ -85,17 +93,22 @@ def spawn_mode(request: dict[str, Any]) -> dict[str, Any]:
             "current": ladder.current,
             "description": description[:120],
             "model": result.model,
+            "effort": result.effort,
             "source": result.source,
             "allowed": list(result.allowed),
             "probabilities": result.probabilities,
+            "effort_probabilities": result.effort_probabilities,
             "escalated": result.escalated,
             "jev_failed": result.jev_failed,
             "files": files_json((*result.files, *result.blocked)),
+            "jev_input_tokens_est": result.input_tokens_est,
+            "trimmed": result.trimmed,
             "jev": jev.usage(),
         },
     )
     return {
         "model": result.model,
+        "effort": result.effort,
         "files": [f.path for f in result.files],
         "appendix": appendix(result, context, ladder),
         "toast": toast(description, result),

@@ -98,10 +98,13 @@ Set in `/config` under the plugin. All are optional.
 | `jev_router_cap` | `on` | Jev never picks a model above the session's |
 | `jev_router_escalate_after` | 3 | failed writes before the next subagent goes up a model |
 | `jev_router_init_model` | `sonnet` | model that drafts the rules during init |
+| `jev_router_max_input_tokens` | 4000 | most tokens sent to Jev per routing decision |
+| `jev_router_decider_model` | `haiku` | decides instead of Jev when its input stays over the cap |
 | `jev_skills_mode` | `off` | picker default for new sessions |
 | `jev_skills_scope` | `project` | `global` adds `~/.claude/skills` and plugin skills |
 | `jev_skills_max_picks` | 3 | most skills shortlisted per prompt |
 | `jev_skills_min_percent` | 30 | Jev's share a skill needs to be shortlisted |
+| `jev_skills_max_input_tokens` | 3000 | most tokens sent to Jev per shortlist request |
 
 ## What gets written to your project
 

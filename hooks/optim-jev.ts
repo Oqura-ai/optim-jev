@@ -24,7 +24,8 @@ import {
   type RouterDecision,
   type SkillsOutcome,
 } from './dashboard';
-import type { Mode, Permission, RenderAnswer, SessionRecord, SpawnAnswer } from './router-lib';
+import { commandOutputTree } from './command-output';
+import type { Effort, Escalated, Mode, Permission, RenderAnswer, SessionRecord, SpawnAnswer, SpawnAskClaude } from './router-lib';
 import {
   DEFAULT_ESCALATE_AFTER,
   DEFAULT_INIT_MODEL,
@@ -40,7 +41,10 @@ import {
   numberOption,
   oneOf,
   isRulesFile,
+  MAX_RECENT_INPUTS,
+  parseDecision,
   relPath,
+  rememberInput,
   writeTargets,
 } from './router-lib';
 
@@ -224,11 +228,16 @@ let tiers: string[] = ['haiku', 'sonnet', 'opus'];
 let sessionAlias: string | null = null;
 let offline = false;
 let turn = newTurn();
-// Per routed subagent: the model it runs on and the files its prompt named.
+// Per routed subagent: the model it runs on, its effort, and the files its prompt named.
 const agentModels = new Map<string, string>();
+const agentEfforts = new Map<string, Effort>();
 const agentFiles = new Map<string, string[]>();
-// Session-wide: how many levels up the next subagent touching a file starts, after errors there.
-const escalated = new Map<string, number>();
+// Session-wide: per file, how many levels up the next subagent starts (same effort), after errors there.
+const escalated = new Map<string, Escalated>();
+// The person's last prompts, newest last; shared by the router and the skill picker.
+let recentInputs: string[] = [];
+const DEFAULT_DECIDER_MODEL = 'haiku';
+let deciderModel = DEFAULT_DECIDER_MODEL;
 
 const isActive = () => record.mode === 'on';
 const aliasOf = (model: string | undefined | null) =>
@@ -465,7 +474,22 @@ async function routerSessionStart($: Engine) {
     await saveRecord($);
   }
   escalated.clear();
+  agentEfforts.clear();
+  recentInputs = await typedPrompts($);
   await refresh($);
+}
+
+/** A resumed or reloaded session's last prompts, from the transcript: the person's own text only. */
+async function typedPrompts($: Engine): Promise<string[]> {
+  try {
+    let recent: string[] = [];
+    for (const m of await $.session.messages()) {
+      if (m.role === 'user' && !(m.toolResults?.length)) recent = rememberInput(recent, m.text);
+    }
+    return recent;
+  } catch {
+    return [];
+  }
 }
 
 async function runCommand($: Engine, e: CommandRunInput): Promise<CommandRunResult> {
@@ -646,33 +670,65 @@ function countWriteResult($: Engine, agentId: string | undefined, isError: boole
   if (errors !== escalateAfter) return;
   const from = agentModels.get(agentId);
   const files = agentFiles.get(agentId) ?? [];
+  // Stops at the strongest model; errors !== escalateAfter above makes it once per subagent.
   if (!from || files.length === 0 || bump(from) === from) return;
-  for (const f of files) escalated.set(f, (escalated.get(f) ?? 0) + 1);
-  turn.escalations.push({ from, to: bump(from), files });
-  notify($, `⬆ jev: ${from} hit ${escalateAfter} errors; the next subagent for ${files.join(', ')} starts on ${bump(from)}`, 8_000);
+  const effort = agentEfforts.get(agentId) ?? null;
+  for (const f of files) escalated.set(f, { levels: (escalated.get(f)?.levels ?? 0) + 1, effort });
+  turn.escalations.push({ from, to: bump(from), effort, files });
+  const at = effort ? ` at ${effort} effort` : '';
+  notify($, `⬆ jev: ${from} hit ${escalateAfter} errors; the next subagent for ${files.join(', ')} starts on ${bump(from)}${at}`, 8_000);
 }
 
-async function routeSpawn($: Engine, e: AgentSpawnInput): Promise<{ model?: string; prompt?: string; files: string[] }> {
+/** Jev's input stayed over budget: a small, low-effort Claude model decides instead. */
+async function askClaudeToRoute($: Engine, prompt: string): Promise<{ model?: string; effort?: string } | { failed: string }> {
+  try {
+    const r = await $.model.complete({ model: deciderModel, prompt, maxTokens: 100, effort: 'low', timeoutMs: 30_000 });
+    if (r.usage) recordUsage('route_decider', r.usage, { model: deciderModel });
+    if (!r.isAnswered) return { failed: `${deciderModel} gave no answer (${r.reason})` };
+    return parseDecision(r.text) ?? { failed: `${deciderModel} answered no JSON` };
+  } catch (error) {
+    return { failed: `${deciderModel}: ${errorText(error)}` };
+  }
+}
+
+async function routeSpawn(
+  $: Engine,
+  e: AgentSpawnInput,
+): Promise<{ model?: string; effort?: Effort; prompt?: string; files: string[] }> {
   if (!isActive() || e.fork || e.isTeammate) return { files: [] };
   routerRouting = true;
   showActivity($, `Routing “${e.description || 'subagent'}”…`);
   try {
-    const answer = await runTool<SpawnAnswer>($, routerOptions, ROUTER_MODULE, 'spawn', {
+    const request = {
       ...(await routerFields($)),
       description: e.description,
       prompt: e.prompt,
       escalated: Object.fromEntries(escalated),
-    });
+      recent_inputs: recentInputs,
+    };
+    let answer = await runTool<SpawnAnswer | SpawnAskClaude>($, routerOptions, ROUTER_MODULE, 'spawn', request);
+    if ('ask_claude' in answer) {
+      showActivity($, `Routing “${e.description || 'subagent'}” with ${deciderModel}…`);
+      const decided = await askClaudeToRoute($, answer.ask_claude);
+      answer = await runTool<SpawnAnswer | SpawnAskClaude>($, routerOptions, ROUTER_MODULE, 'spawn', { ...request, decided });
+      if ('ask_claude' in answer) throw new Error('router asked for a decision twice');
+    }
     offline = answer.jev_failed !== null;
     turn.spawned += 1;
     lastRouterDecision = {
       task: e.description || 'subagent',
       model: answer.model,
+      effort: answer.effort,
       source: answer.source ?? (answer.jev_failed ? 'fallback' : 'jev'),
       escalated: answer.escalated ?? 0,
     };
     notify($, answer.toast, 6_000);
-    return { model: answer.model, prompt: answer.appendix ? e.prompt + answer.appendix : undefined, files: answer.files };
+    return {
+      model: answer.model,
+      ...(answer.effort ? { effort: answer.effort } : {}),
+      prompt: answer.appendix ? e.prompt + answer.appendix : undefined,
+      files: answer.files,
+    };
   } catch (error) {
     offline = true;
     lastRouterDecision = {
@@ -718,6 +774,10 @@ async function routerTurnComplete($: Engine, e: TurnCompleteInput) {
 function registerRouter(on: On, pluginOptions: PluginOptions): void {
   routerOptions = pluginOptions;
   escalateAfter = numberOption(routerOptions, 'jev_router_escalate_after', DEFAULT_ESCALATE_AFTER);
+  deciderModel =
+    typeof routerOptions['jev_router_decider_model'] === 'string' && routerOptions['jev_router_decider_model']
+      ? routerOptions['jev_router_decider_model']
+      : DEFAULT_DECIDER_MODEL;
   initModel =
     typeof routerOptions['jev_router_init_model'] === 'string' && routerOptions['jev_router_init_model']
       ? routerOptions['jev_router_init_model']
@@ -747,6 +807,13 @@ function registerRouter(on: On, pluginOptions: PluginOptions): void {
     return warning ? { ...result, context: [...(result.context ?? []), warning] } : result;
   });
 
+  // A spawn can't set effort, so each of a routed subagent's requests gets it here. A model
+  // without effort sends none (e.effort absent), so nothing is forced on it.
+  on('turn.step', async function* ($, e, next) {
+    const effort = e.agentId !== undefined ? agentEfforts.get(e.agentId) : undefined;
+    return yield* next(effort && e.effort !== undefined && e.effort !== effort ? { ...e, effort } : e);
+  });
+
   on('agent.spawn', async ($, e, next) => {
     const routed = await routeSpawn($, e);
     const result = await next({
@@ -757,6 +824,7 @@ function registerRouter(on: On, pluginOptions: PluginOptions): void {
     if (routed.model && result.agentId) {
       agentModels.set(result.agentId, aliasOf(result.model) ?? routed.model);
       agentFiles.set(result.agentId, routed.files);
+      if (routed.effort) agentEfforts.set(result.agentId, routed.effort);
       // Ties this agent's `turn` records to the router's spawn record.
       usageBuffer.push({
         ts: Math.round(Date.now() / 1000),
@@ -764,6 +832,7 @@ function registerRouter(on: On, pluginOptions: PluginOptions): void {
         agent_id: result.agentId,
         description: e.description,
         routed_model: routed.model,
+        effort: routed.effort ?? null,
         model: result.model,
         files: routed.files,
       });
@@ -896,19 +965,6 @@ async function runSkillsCommand($: Engine, e: CommandRunInput): Promise<CommandR
   }
 }
 
-async function previousAnswer($: Engine): Promise<string> {
-  try {
-    const messages = await $.session.messages();
-    for (let i = messages.length - 1; i >= 0; i--) {
-      const m = messages[i];
-      if (m && m.role === 'assistant' && m.text.trim()) return m.text;
-    }
-  } catch {
-    // no transcript yet
-  }
-  return '';
-}
-
 /** The shortlist for one prompt, as context beside it; nothing for slash commands and short follow-ups. */
 async function shortlistFor($: Engine, e: PromptSubmitInput): Promise<string | undefined> {
   const text = e.text.trim();
@@ -923,7 +979,7 @@ async function shortlistFor($: Engine, e: PromptSubmitInput): Promise<string | u
       skillsOptions,
       SKILLS_MODULE,
       'shortlist',
-      { ...(await skillsFields($)), prompt: e.text, previous: await previousAnswer($) },
+      { ...(await skillsFields($)), prompt: e.text, recent_inputs: recentInputs.slice(-(MAX_RECENT_INPUTS - 1)) },
       SKILLS_TIMEOUT_MS,
     );
     lastPicks = answer.picks;
@@ -969,7 +1025,9 @@ function registerSkills(on: On, pluginOptions: PluginOptions): void {
   });
 
   on('prompt.submit', async ($, e, next) => {
+    // Earlier prompts only: the current one goes to Jev as the request itself.
     const context = await shortlistFor($, e);
+    if (e.origin.kind === 'composer' || e.origin.kind === 'bridge') recentInputs = rememberInput(recentInputs, e.text);
     return next(context ? { ...e, context: [...(e.context ?? []), context] } : e);
   });
 
@@ -1239,5 +1297,17 @@ export const register: Register = (on: On, options: PluginOptions) => {
       $.ui.log(`optim-jev: dashboard not rendered (${errorText(error)})`, { to: 'debug' });
       return next(e);
     }
+  });
+
+  on('ui.render', { component: 'CommandOutput' }, async ($, e, next) => {
+    const tree = commandOutputTree(
+      $.ui.resolve(e),
+      e.props.command,
+      e.props.args,
+      e.props.text,
+      e.props.isErrored,
+      e.viewport?.columns,
+    );
+    return tree ?? next(e);
   });
 };

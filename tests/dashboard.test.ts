@@ -182,6 +182,24 @@ function spawn(): AgentSpawnInput {
 }
 
 describe('optim-jev dashboard', () => {
+  test('diagnostic command output uses an uncolored metric table', { options: {} }, async ($, on) => {
+    engine(on);
+    const output = await $.ui.mount({
+      plugin: 'optim-jev', surface: 'terminal', component: 'CommandOutput',
+      props: {
+        command: 'jev-route', args: 'stats',
+        text: 'Routed subagents: 3 · haiku 67% · sonnet 33%\n  net saved   $1.25',
+        isErrored: false,
+      },
+    } as never);
+    const text = JSON.stringify(await output.drawn());
+    expect(text).toContain('Router stats');
+    expect(text).toContain('"width":18');
+    expect(text).not.toContain('"color"');
+    expect(text).not.toContain('borderStyle');
+    await output.unmount();
+  });
+
   test('layout respects height as well as width, including zero space', () => {
     for (const columns of [0, 1, 20, 49, 50, 59, 60, 80, 120, 168]) {
       for (const rows of [0, 1, 2, 3, 4, 5, 10]) {

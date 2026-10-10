@@ -17,6 +17,8 @@ class SkillsConfig:
     batch_size: int = 20
     # Above this many skills, a keyword pre-filter cuts the field before Jev sees it.
     prefilter_above: int = 40
+    # Cap on one shortlist request to Jev (state and candidate skills).
+    max_input_tokens: int = 3000
     model: str = DEFAULT_MODEL
     base_url: str = SYSTEM_ONE_URL
 

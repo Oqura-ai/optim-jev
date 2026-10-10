@@ -1,0 +1,25 @@
+{
+  "schema": 1,
+  "paths": {
+    "data/": {
+      "min": "none",
+      "why": "demo fixtures are source data and must not be edited"
+    },
+    "docs/": {
+      "write": ["haiku"],
+      "why": "small explanatory documentation with no runtime behavior"
+    },
+    "reports/": {
+      "write": ["haiku"],
+      "why": "generated audit reports are low-risk prose"
+    },
+    "src/tinycart/pricing.py": {
+      "min": "sonnet",
+      "why": "money calculations must preserve integer-cent invariants"
+    },
+    "tests/": {
+      "write": ["haiku", "sonnet"],
+      "why": "focused standard-library unit tests"
+    }
+  }
+}

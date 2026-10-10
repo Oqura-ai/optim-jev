@@ -101,6 +101,12 @@
       "min": 1,
       "max": 100
     },
+    "jev_skills_max_input_tokens": {
+      "type": "number",
+      "title": "Skills: Jev input cap (tokens)",
+      "description": "Most tokens sent to Jev in one shortlist request; earlier prompts are trimmed first, then skills are split into smaller batches. Empty means 3000.",
+      "min": 200
+    },
     "jev_router_mode": {
       "type": "string",
       "title": "Router: default mode",
@@ -120,6 +126,17 @@
       "title": "Router: errors before escalating",
       "description": "Failed edits in one subagent after which the next subagent for its files starts a model up. Empty means 3.",
       "min": 1
+    },
+    "jev_router_max_input_tokens": {
+      "type": "number",
+      "title": "Router: Jev input cap (tokens)",
+      "description": "Most tokens sent to Jev for one routing decision; context is trimmed lowest-priority first. Still over: the decider model below picks instead. Empty means 4000.",
+      "min": 300
+    },
+    "jev_router_decider_model": {
+      "type": "string",
+      "title": "Router: decider when Jev's input is too large",
+      "description": "Claude model that picks a subagent's model and effort when Jev's input stays over the cap after trimming. Empty means haiku."
     },
     "jev_router_init_model": {
       "type": "string",

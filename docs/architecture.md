@@ -50,12 +50,13 @@ python -m optim_jev.tools.jev_router.tool spawn
 | `session.compact` | compacter | replace the built-in summary with a Jev prune |
 | `turn.complete` | all | auto-compaction check, router outcome, usage log flush |
 | `turn.start` | router | reset per-turn counters |
+| `turn.step` | router | apply each routed subagent's effort to its requests |
 | `prompt.compose` | router | add the routing instructions to the system prompt |
 | `prompt.submit` | skills | attach the shortlist to the prompt |
 | `prompt.attachment` | skills | replace the built-in skill listing |
 | `tool.call` | router | guard writes, count errors, re-check edited rules |
 | `tool.check` | skills | allow reading skill folders in global scope |
-| `agent.spawn` | router | pick the subagent's model, extend its prompt |
+| `agent.spawn` | router | pick the subagent's model and effort, extend its prompt |
 | `skill.prompt` | skills | log which skills were actually loaded |
 | `ui.render` (`AbovePrompt`) | all | render live state and controls without doing I/O |
 

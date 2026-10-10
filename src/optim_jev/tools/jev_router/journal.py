@@ -7,7 +7,7 @@ from collections import Counter
 from collections.abc import Sequence
 from typing import Any
 
-from ...core import logs, pricing
+from ...core import logs, pricing, report
 from .catalog import ModelInfo
 
 TOOL = "jev_router"
@@ -41,6 +41,11 @@ def learned(records: Sequence[dict[str, Any]]) -> dict[str, str]:
     }
 
 
+def _label(record: dict[str, Any]) -> str:
+    effort = record.get("effort")
+    return f"{record['model']} · {effort}" if effort else record["model"]
+
+
 def why(records: Sequence[dict[str, Any]], session_id: str) -> str:
     mine = [r for r in _spawns(records) if r.get("session_id") == session_id][-WHY_SPAWNS:]
     if not mine:
@@ -48,11 +53,14 @@ def why(records: Sequence[dict[str, Any]], session_id: str) -> str:
     lines = [f"Last {len(mine)} routed subagent(s), newest last:"]
     for r in mine:
         probs = ", ".join(f"{k} {v:.0%}" for k, v in (r.get("probabilities") or {}).items())
+        effort_probs = ", ".join(f"{k} {v:.0%}" for k, v in (r.get("effort_probabilities") or {}).items())
         up = f" · ⬆{r['escalated']}" if r.get("escalated") else ""
         failed = f" · Jev failed: {r['jev_failed']}" if r.get("jev_failed") else ""
+        trimmed = " · input trimmed to fit" if r.get("trimmed") else ""
         lines.append(
-            f"- {r.get('description') or 'subagent'} → {r['model']} via {r.get('source')}{up} · allowed: "
-            f"{'/'.join(r.get('allowed', [])) or 'none'}" + (f" · Jev: {probs}" if probs else "") + failed
+            f"- {r.get('description') or 'subagent'} → {_label(r)} via {r.get('source')}{up} · allowed: "
+            f"{'/'.join(r.get('allowed', [])) or 'none'}" + (f" · Jev: {probs}" if probs else "")
+            + (f" · effort: {effort_probs}" if effort_probs else "") + trimmed + failed
         )
         for f in r.get("files", []):
             lines.append(f"    {f.get('path')}  ← {f.get('rule') or 'no rule'}" + (f" ({f['why']})" if f.get("why") else ""))
@@ -65,29 +73,34 @@ def stats(
     spawns = _spawns(records)
     if not spawns:
         return "jev-router: nothing logged yet in this session"
-    by_model = Counter(r["model"] for r in spawns)
-    share = ", ".join(f"{m} {c / len(spawns):.0%}" for m, c in by_model.most_common())
+    by_model = Counter(_label(r) for r in spawns)
     sources = Counter(r.get("source") for r in spawns)
     escalations = sum(len(r.get("escalations", [])) for r in records if r.get("kind") == "outcome")
     denials = sum(r.get("denials", 0) for r in records if r.get("kind") == "outcome")
-    return "\n".join(
-        [
-            f"Routed subagents: {len(spawns)} · {share}",
-            f"Decided by: Jev {sources.get('jev', 0)} · rules {sources.get('rules', 0)} · fallback {sources.get('fallback', 0)}",
-            f"Escalations: {escalations} · denied writes: {denials}",
-            *_cost_lines(records, list(claude)),
-        ]
-    )
+    activity = [("Routed subagents", str(len(spawns)))]
+    activity += [(f"  on {m}", f"{c} ({c / len(spawns):.0%})") for m, c in by_model.most_common()]
+    activity += [
+        ("Decided by Jev", str(sources.get("jev", 0))),
+        ("Decided by rules", str(sources.get("rules", 0))),
+        ("Decided by Claude (over budget)", str(sources.get("claude", 0))),
+        ("Fallback (Jev offline)", str(sources.get("fallback", 0))),
+        ("Jev input trimmed", str(sum(1 for r in spawns if r.get("trimmed")))),
+        ("Escalations", str(escalations)),
+        ("Denied writes", str(denials)),
+    ]
+    blocks, notes = _cost(records, list(claude))
+    return report.render(report.table("Activity", ("Metric", "Value"), activity, right=(1,)), *blocks, notes=notes)
 
 
-def _cost_lines(records: Sequence[dict[str, Any]], claude: list[dict[str, Any]]) -> list[str]:
+def _cost(records: Sequence[dict[str, Any]], claude: list[dict[str, Any]]) -> tuple[list[list[str]], list[str]]:
     """Measured subagent cost vs. the same tokens on the main model, plus Jev's routing cost."""
     agents = {r["agent_id"] for r in claude if r.get("kind") == "spawned" and r.get("agent_id")}
     turns = [r for r in claude if r.get("kind") == "turn" and r.get("agent_id") in agents]
     _, jev_in, jev_usd = pricing.jev_cost(list(records))
     main = pricing.main_model(claude)
+    usd = pricing.usd
     if not turns:
-        return ["", f"Jev routing: {jev_in:,} input tokens · {pricing.usd(jev_usd)}", "No routed subagent turns logged yet."]
+        return [], [f"No routed subagent turns logged yet. Jev routing so far: {jev_in:,} tokens, {usd(jev_usd)}.", pricing.PRICE_NOTE]
     actual = sum(pricing.cost(t) for t in turns)
     on_main = sum(pricing.cost(t, main) for t in turns)
     net = on_main - actual - jev_usd
@@ -96,15 +109,19 @@ def _cost_lines(records: Sequence[dict[str, Any]], claude: list[dict[str, Any]])
         for k in ("input_tokens", "output_tokens", "cache_read_input_tokens", "cache_creation_input_tokens")
     )
     main_usd = sum(pricing.cost(t) for t in pricing.main_turns(claude))
-    return [
-        "",
-        f"Cost of {len(agents)} routed subagent(s), {tokens:,} tokens ({len(turns)} turn(s)):",
-        f"  on their routed models (measured)   {pricing.usd(actual)}",
-        f"  same tokens on {main or 'the main model'} (est.)   {pricing.usd(on_main)}",
-        f"  Jev routing (measured)              {pricing.usd(jev_usd)}",
-        f"  net {'saved' if net >= 0 else 'extra'}                           {pricing.usd(abs(net))}",
-        f"Main loop this session (measured): {pricing.usd(main_usd)}",
-        "Estimate prices the subagents' own tokens at the main model; it leaves out the main loop's context "
-        "growth had it done the work itself.",
+    cost = report.table(
+        f"Cost: {len(agents)} subagent(s), {tokens:,} tokens, vs the main model doing it",
+        ("Item", "Basis", "USD"),
+        [
+            (f"Same work on {main or 'the main model'}", "est.", usd(on_main)),
+            ("Subagents on routed models", "measured", usd(actual)),
+            ("Jev routing", "measured", usd(jev_usd)),
+        ],
+        right=(2,),
+        total=(report.net_label(net), "", usd(abs(net))),
+    )
+    return [cost], [
+        f"Main loop this session: {usd(main_usd)} (measured).",
+        "Estimate leaves out the main loop's own context growth, so the real saving is usually larger.",
         pricing.PRICE_NOTE,
     ]

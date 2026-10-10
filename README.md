@@ -16,11 +16,13 @@ Jev-powered context compaction, model routing, and skill selection in one Claude
 
 [Get started](#quick-start) · [Documentation](docs/README.md) · [Architecture](docs/architecture.md) · [Contributing](docs/contributing.md)
 
-<img src="assets/optim-jev.png" alt="optim-jev architecture: context compaction, model routing, and skill selection" width="100%">
+<img src="assets/demo.gif" alt="optim-jev demo in Claude Code" width="100%">
 
 </div>
 
 ## Why optim-jev?
+
+<img src="assets/optim-jev.png" alt="optim-jev architecture: context compaction, model routing, and skill selection" width="100%">
 
 Long agent sessions accumulate stale tool output, send oversized skill catalogs, and use the main model for work a smaller model could handle. optim-jev reduces that overhead at three points while keeping Claude Code's normal workflow intact.
 
@@ -110,6 +112,7 @@ Restart Claude Code. jev-compacter is ready immediately; enable the router and s
 | Resource | What you will find |
 |---|---|
 | [Getting started](docs/getting-started.md) | Installation, configuration, commands, and troubleshooting |
+| [TinyCart demo](demo/tinycart/DEMO.md) | A short, repeatable showcase of all three tools on a toy project |
 | [Performance metrics](docs/performance-metrics.md) | How token usage, cost, and estimated savings are calculated |
 | [Architecture](docs/architecture.md) | The TypeScript-to-Python bridge, data flow, and session logs |
 | [Contributing](docs/contributing.md) | Local setup, tests, conventions, and pull requests |

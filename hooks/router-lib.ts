@@ -26,15 +26,49 @@ export type RenderAnswer = {
 };
 export type SpawnAnswer = {
   model: string;
+  effort: Effort | null;
   files: string[];
   appendix: string;
   toast: string;
-  source: 'jev' | 'rules' | 'fallback';
+  source: 'jev' | 'rules' | 'escalation' | 'claude' | 'fallback';
   escalated: number;
   jev_failed: string | null;
 };
+/** Jev's input was over budget even after trimming: Claude is asked instead, with this prompt. */
+export type SpawnAskClaude = { ask_claude: string; reason: string | null };
+export type Effort = 'low' | 'medium' | 'high' | 'xhigh';
+export const EFFORTS: readonly Effort[] = ['low', 'medium', 'high', 'xhigh'];
+/** Per file: model levels to move up, and the effort to keep, after errors there. */
+export type Escalated = { levels: number; effort: Effort | null };
+export const MAX_RECENT_INPUTS = 4;
+const RECENT_INPUT_STORE_CHARS = 2000;
+
+/**
+ * The person's own prompts, newest last, at most MAX_RECENT_INPUTS: no slash commands, nothing the
+ * plugin or Claude Code injected (system reminders, our shortlist notes).
+ */
+export function rememberInput(recent: string[], text: string): string[] {
+  const t = text.trim();
+  if (!t || t.startsWith('/') || t.startsWith('<') || t.startsWith('optim-jev')) return recent;
+  return [...recent, t.slice(0, RECENT_INPUT_STORE_CHARS)].slice(-MAX_RECENT_INPUTS);
+}
+
+/** Claude's routing answer: `{"model": "...", "effort": "..."}`, possibly wrapped in prose or a fence. */
+export function parseDecision(text: string): { model?: string; effort?: string } | null {
+  const match = /\{[^{}]*\}/.exec(text);
+  if (!match) return null;
+  try {
+    const value = JSON.parse(match[0]) as Record<string, unknown>;
+    return {
+      ...(typeof value['model'] === 'string' ? { model: value['model'].toLowerCase() } : {}),
+      ...(typeof value['effort'] === 'string' ? { effort: value['effort'].toLowerCase() } : {}),
+    };
+  } catch {
+    return null;
+  }
+}
 export type SessionRecord = { sessionId: string; mode: Mode };
-export type Escalation = { from: string; to: string; files: string[] };
+export type Escalation = { from: string; to: string; effort: Effort | null; files: string[] };
 export type TurnState = {
   spawned: number;
   errors: Map<string, number>;

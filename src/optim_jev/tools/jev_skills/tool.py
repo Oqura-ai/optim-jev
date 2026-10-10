@@ -3,7 +3,7 @@
     python -m optim_jev.tools.jev_skills.tool <mode>
 
 index      {}                                  -> {count, dirs, names}
-shortlist  {session_id, prompt, previous}      -> {picks, context, failed}
+shortlist  {session_id, prompt, recent_inputs} -> {picks, context, failed}
 loaded     {session_id, skill, shortlisted}    -> {}
 why        {session_id}                        -> {text}
 stats      {}                                  -> {text}
@@ -19,7 +19,7 @@ import sys
 from collections import Counter
 from typing import Any
 
-from ...core import logs, pricing
+from ...core import logs, pricing, report
 from ..jev_compacter.jev import JevClient
 from . import index
 from .config import SkillsConfig
@@ -70,7 +70,8 @@ def shortlist_mode(request: dict[str, Any]) -> dict[str, Any]:
     project = request["project_dir"]
     roster = index.load(project, config.is_global)
     asker = JevClient(model=config.model, base_url=config.base_url, timeout=20.0)
-    result = shortlist(str(request.get("prompt") or ""), str(request.get("previous") or ""), roster, asker, config)
+    recent = [str(t) for t in request.get("recent_inputs") or () if isinstance(t, str)]
+    result = shortlist(str(request.get("prompt") or ""), recent, roster, asker, config)
     picks = [
         {"name": s.name, "description": s.description, "source": s.source, "percent": round(100 * p)}
         for s, p in result.picks
@@ -87,6 +88,7 @@ def shortlist_mode(request: dict[str, Any]) -> dict[str, Any]:
             "calls": result.calls,
             "picks": [{"name": p["name"], "percent": p["percent"]} for p in picks],
             "failed": result.failed,
+            "trimmed": result.trimmed,
             "jev": asker.usage(),
         },
     )
@@ -130,26 +132,26 @@ def stats_mode(request: dict[str, Any]) -> dict[str, Any]:
     if not lists:
         return {"text": "jev-skills: nothing logged yet in this session"}
     loaded = [r for r in records if r.get("kind") == "loaded"]
-    with_picks = sum(1 for r in lists if r.get("picks"))
-    from_list = sum(1 for r in loaded if r.get("shortlisted"))
     top = Counter(p["name"] for r in lists for p in r.get("picks", [])).most_common(5)
-    return {
-        "text": "\n".join(
-            [
-                f"Prompts judged: {len(lists)} · with a shortlist: {with_picks} · Jev failures: {sum(1 for r in lists if r.get('failed'))}",
-                f"Skills loaded: {len(loaded)} · from a shortlist: {from_list}",
-                "Most shortlisted: " + (", ".join(f"{n} ({c})" for n, c in top) or "none"),
-                *_cost_lines(request, lists),
-            ]
-        )
-    }
+    activity = [
+        ("Prompts judged", str(len(lists))),
+        ("  with a shortlist", str(sum(1 for r in lists if r.get("picks")))),
+        ("  Jev failures", str(sum(1 for r in lists if r.get("failed")))),
+        ("Skills loaded", str(len(loaded))),
+        ("  from a shortlist", str(sum(1 for r in loaded if r.get("shortlisted")))),
+    ]
+    blocks = [report.table("Activity", ("Metric", "Value"), activity, right=(1,))]
+    if top:
+        blocks.append(report.table("Most shortlisted", ("Skill", "Times"), [(n, str(c)) for n, c in top], right=(1,)))
+    cost, notes = _cost(request, lists)
+    return {"text": report.render(*blocks, cost, notes=notes)}
 
 
 def _tokens(text: str) -> int:
     return len(text) // 4
 
 
-def _cost_lines(request: dict[str, Any], lists: list[dict[str, Any]]) -> list[str]:
+def _cost(request: dict[str, Any], lists: list[dict[str, Any]]) -> tuple[list[str], list[str]]:
     """The built-in skill listing, re-sent with every request, vs. Jev's shortlist notes and calls."""
     project, session_id = request["project_dir"], str(request.get("session_id") or "")
     roster = index.load(project, _config(request).is_global)
@@ -170,15 +172,20 @@ def _cost_lines(request: dict[str, Any], lists: list[dict[str, Any]]) -> list[st
     notes = note * price_in * pricing.CACHE_WRITE
     _, jev_in, jev_usd = pricing.jev_cost(lists)
     net = builtin - notes - jev_usd
-    return [
-        "",
-        f"Built-in skill listing vs. Jev shortlist over {turns} main-loop turn(s), {len(roster)} skill(s) in scope:",
-        f"  listing, ~{listing:,} tokens each request (est.)   {pricing.usd(builtin)}",
-        f"  shortlist notes, ~{note:,} tokens total (est.)     {pricing.usd(notes)}",
-        f"  Jev, {jev_in:,} input tokens (measured)          {pricing.usd(jev_usd)}",
-        f"  net {'saved' if net >= 0 else 'extra'}                                  {pricing.usd(abs(net))}",
-        "Listing and note sizes are estimated from the skill index (4 characters a token); "
-        "later turns re-reading old notes are left out.",
+    usd = pricing.usd
+    cost = report.table(
+        f"Cost: {turns} turn(s), {len(roster)} skill(s) in scope, vs the built-in skill list",
+        ("Item", "Tokens", "Basis", "USD"),
+        [
+            ("Built-in skill list", f"~{listing:,}/req", "est.", usd(builtin)),
+            ("Shortlist notes", f"~{note:,}", "est.", usd(notes)),
+            ("Jev", f"{jev_in:,}", "measured", usd(jev_usd)),
+        ],
+        right=(1, 3),
+        total=(report.net_label(net), "", "", usd(abs(net))),
+    )
+    return cost, [
+        "Sizes estimated from the skill index at 4 characters a token; old notes re-read later are left out.",
         pricing.PRICE_NOTE,
     ]
 

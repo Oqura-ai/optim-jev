@@ -12,18 +12,24 @@ from optim_jev.tools.jev_router.catalog import build_ladder
 
 
 class FakeJev:
-    def __init__(self, probabilities: dict[str, float] | None = None, fail: bool = False) -> None:
+    def __init__(self, probabilities: dict[str, float] | None = None, fail: bool = False,
+                 effort: dict[str, float] | None = None) -> None:
         self.probabilities = probabilities or {}
+        self.effort = effort if effort is not None else {"medium": 1.0}
         self.fail = fail
         self.calls = 0
         self.questions: dict = {}
+        self.state: dict = {}
 
     def ask(self, state, questions):
         self.calls += 1
         self.questions = questions
+        self.state = state
         if self.fail:
             raise policy.JevCompactionError("down")
-        return {"answers": {name: {"probabilities": self.probabilities} for name in questions}}
+        return {"answers": {
+            name: {"probabilities": self.effort if name == "effort" else self.probabilities} for name in questions
+        }}
 
 
 def project() -> Path:
@@ -194,9 +200,9 @@ class Spawn(unittest.TestCase):
         tool.init_save_mode({**self.req, "reply": REPLY})
         _, self.rules, self.ladder = tool._context(self.req)
 
-    def pick(self, prompt, jev, ladder=None, escalated=None):
+    def pick(self, prompt, jev, ladder=None, escalated=None, **kw):
         ladder = ladder or self.ladder
-        return policy.pick("task", prompt, self.rules, [], ladder, jev, str(self.root), escalated)
+        return policy.pick("task", prompt, self.rules, [], ladder, jev, str(self.root), escalated, **kw)
 
     def test_files_named_in_the_prompt_bind_the_choice(self):
         jev = FakeJev({"opus": 0.2, "sonnet": 0.7})
@@ -205,10 +211,12 @@ class Spawn(unittest.TestCase):
         self.assertEqual((result.model, result.source), ("sonnet", "jev"))
         self.assertEqual(sorted(jev.questions["model"]["criteria"]), ["opus", "sonnet"])
 
-    def test_one_allowed_model_skips_jev_and_blocked_files_are_named(self):
-        jev = FakeJev({"haiku": 1.0})
+    def test_one_allowed_model_asks_jev_only_for_effort_and_blocked_files_are_named(self):
+        jev = FakeJev({"haiku": 1.0}, effort={"high": 0.8, "low": 0.2})
         result = self.pick("Index src/core/db.py; regenerate src/gen/pb.py", jev)
-        self.assertEqual((result.model, result.source, jev.calls), ("opus", "rules", 0))
+        self.assertEqual((result.model, result.source, result.effort), ("opus", "rules", "high"))
+        self.assertEqual(list(jev.questions), ["effort"])
+        self.assertIn("xhigh", jev.questions["effort"]["criteria"])  # opus can be the answer
         self.assertIn("Never edit: src/gen/", policy.appendix(result, ["- prices are integer cents"], self.ladder))
 
     def test_jev_failure_falls_back_to_the_session_model(self):
@@ -226,6 +234,49 @@ class Spawn(unittest.TestCase):
         result = self.pick("Fix README.md", jev, escalated={"README.md": 1})
         self.assertEqual((result.model, result.escalated), ("sonnet", 1))
 
+    def test_escalation_keeps_the_effort_and_does_not_reask_it(self):
+        jev = FakeJev({"haiku": 0.9, "sonnet": 0.1}, effort={"high": 1.0})
+        result = self.pick("Fix README.md", jev, escalated={"README.md": {"levels": 1, "effort": "low"}})
+        self.assertEqual((result.model, result.effort), ("sonnet", "low"))
+        self.assertNotIn("effort", jev.questions)
+
+    def test_escalation_stops_at_the_strongest_model(self):
+        result = self.pick("Fix README.md", FakeJev({"opus": 1.0}), escalated={"README.md": {"levels": 5, "effort": "high"}})
+        self.assertEqual((result.model, result.effort), ("opus", "high"))
+
+    def test_xhigh_only_for_opus(self):
+        jev = FakeJev({"sonnet": 0.9, "opus": 0.1}, effort={"xhigh": 0.9, "low": 0.1})
+        result = self.pick("Fix README.md", jev)
+        self.assertEqual((result.model, result.effort), ("sonnet", "high"))  # clamped
+        no_opus = FakeJev({"sonnet": 1.0})
+        self.pick("Fix README.md", no_opus, ladder=build_ladder("claude-sonnet-5-5"))
+        self.assertNotIn("xhigh", no_opus.questions["effort"]["criteria"])
+
+    def test_bad_effort_answer_keeps_the_model(self):
+        jev = FakeJev({"opus": 0.2, "sonnet": 0.8}, effort={})
+        result = self.pick("Fix README.md", jev)
+        self.assertEqual((result.model, result.source, result.effort), ("sonnet", "jev", None))
+
+    def test_input_is_priority_ordered_and_trimmed_from_the_bottom(self):
+        jev = FakeJev({"sonnet": 1.0})
+        recent = [f"earlier prompt {i} " + "x" * 400 for i in range(4)]
+        result = self.pick("Fix README.md " + "y" * 3000, jev, recent=recent, budget=900)
+        self.assertTrue(result.trimmed)
+        keys = list(jev.state)
+        self.assertEqual(keys[:3], ["subagent_task", "files", "models"])
+        self.assertLess(len(jev.state.get("recent_user_inputs", [])), 4)  # oldest dropped first
+        self.assertLessEqual(result.input_tokens_est, 900)
+
+    def test_over_budget_hands_the_decision_to_claude(self):
+        jev = FakeJev({"sonnet": 1.0})
+        result = self.pick("Fix README.md", jev, budget=50)
+        self.assertEqual(jev.calls, 0)
+        self.assertIn("Reply with only a JSON object", result.ask_claude)
+        decided = self.pick("Fix README.md", jev, decided={"model": "sonnet", "effort": "low"})
+        self.assertEqual((decided.model, decided.effort, decided.source), ("sonnet", "low", "claude"))
+        bogus = self.pick("Fix README.md", jev, decided={"model": "gpt", "effort": "huge"})
+        self.assertEqual((bogus.model, bogus.effort), ("opus", None))  # session model, default effort
+
     def test_spawn_mode_logs_and_returns_the_appendix(self):
         answer = tool.spawn_mode({**self.req, "session_id": "s", "description": "core index", "prompt": "Index src/core/db.py"})
         self.assertEqual(answer["model"], "opus")
@@ -233,6 +284,17 @@ class Spawn(unittest.TestCase):
         self.assertIn("prices are integer cents", answer["appendix"])
         self.assertIn("core index → opus", journal.why(journal.read(self.root, "s"), "s"))
         self.assertTrue((Path(self.root) / ".optim-jev" / "logs" / "jev_router" / "s.jsonl").is_file())
+
+
+class Report(unittest.TestCase):
+    def test_table_columns_align_and_total_is_ruled_off(self):
+        from optim_jev.core import report
+        lines = report.table("T", ("Item", "USD"), [("a", "$1.00"), ("longer item", "$12.50")], right=(1,), total=("Net saved", "$13.50"))
+        self.assertEqual(lines[0], "▸ T")
+        self.assertEqual(len({len(line) for line in lines[1:]}), 1)
+        self.assertEqual(lines[-3][0], "├")  # rule above the total
+        self.assertTrue(lines[-2].startswith("│ Net saved"))
+        self.assertTrue(lines[4].endswith("  $1.00 │"))  # numbers right-aligned
 
 
 class Journal(unittest.TestCase):
@@ -248,11 +310,14 @@ class Journal(unittest.TestCase):
             {"kind": "turn", "agent_id": "a1", "model": "claude-haiku-4-5", "input_tokens": 1_000_000},
         ]
         text = journal.stats(journal.read(root, "s"), load_catalog(), claude)
-        self.assertIn("haiku 100%", text)
-        self.assertIn("on their routed models (measured)   $1.00", text)
-        self.assertIn("same tokens on claude-opus-5-5 (est.)   $5.00", text)
-        self.assertIn("net saved", text)
-        self.assertIn("denied writes: 2", text)
+        rows = {line.split("│")[1].strip(): line for line in text.splitlines() if line.startswith("│")}
+        self.assertIn("1 (100%)", rows["on haiku"])
+        self.assertIn("$1.00", rows["Subagents on routed models"])
+        self.assertIn("$5.00", rows["Same work on claude-opus-5-5"])
+        self.assertIn("$4.00", rows["Net saved"])
+        self.assertIn("2", rows["Denied writes"])
+        widths = {len(line) for line in text.splitlines()[1:12] if line[:1] in "┌│├└"}
+        self.assertEqual(len(widths), 1)  # every line of a table is the same width
 
 
 if __name__ == "__main__":

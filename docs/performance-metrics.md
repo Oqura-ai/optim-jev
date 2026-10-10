@@ -8,7 +8,7 @@ Each tool has a `stats` command that compares what it cost against what would ha
 | `/jev-route stats` | Routed subagents vs the same work priced at the main model |
 | `/jev-skills stats` | Jev's shortlist vs the built-in list of every skill |
 
-Every figure is labelled **measured** (real token counts from the logs) or **est.** (estimated). Each report ends with the prices it used.
+Each report has the same shape: an **Activity** table, a **Cost** table whose last row is the net result, then notes ending with the prices used. Every cost row's **Basis** column says whether it is **measured** (real token counts from the logs) or **est.** (estimated).
 
 ## Where the numbers come from
 
@@ -55,10 +55,10 @@ Jev's cost is logged with each record at the price in force at the time, so chan
 
 | Line | How it's worked out |
 |---|---|
-| summary (est.) | the context priced as a cache read (it's already cached when the summary runs) + output tokens = context × *output ratio*, at the main model's prices |
-| Jev (measured) | Jev's logged cost for that compaction |
-| larger context re-read after (est.) | Jev leaves more context than a summary does: (context Jev left − context a summary would leave) × cache-read price × main-loop turns until the next compaction |
-| net saved / extra | summary − Jev − re-read |
+| Built-in summary (est.) | the context priced as a cache read (it's already cached when the summary runs) + output tokens = context × *output ratio*, at the main model's prices |
+| Jev pruning (measured) | Jev's logged cost for that compaction |
+| Larger context re-read (est.) | Jev leaves more context than a summary does: (context Jev left − context a summary would leave) × cache-read price × main-loop turns until the next compaction |
+| Net saved / Net extra cost | summary − Jev − re-read |
 
 The *output ratio* and the share of context a summary keeps are **measured from this session's own built-in summaries** when any ran. Until then they default to 10% each, and the report says so.
 
@@ -74,10 +74,10 @@ Also shown: Jev spend on rounds that still fell back to the summary, since that 
 
 | Line | How it's worked out |
 |---|---|
-| on their routed models (measured) | each subagent turn priced at its own model |
-| same tokens on the main model (est.) | the same turns priced at the main loop's latest model |
+| Subagents on routed models (measured) | each subagent turn priced at its own model |
+| Same work on the main model (est.) | the same turns priced at the main loop's latest model |
 | Jev routing (measured) | Jev's logged cost |
-| net saved / extra | main-model price − routed price − Jev |
+| Net saved / Net extra cost | main-model price − routed price − Jev |
 
 What the estimate leaves out: had the main loop done the work, its own context would have grown, making every later turn dearer. So the real saving is usually **larger** than reported.
 
@@ -91,10 +91,10 @@ If the main model and the routed model are the same, the saving is $0, which is 
 
 | Line | How it's worked out |
 |---|---|
-| listing (est.) | listing size × input price × (one cache write + one cache read per later main-loop turn) |
-| shortlist notes (est.) | size of all shortlist notes × input price × cache write |
+| Built-in skill list (est.) | listing size × input price × (one cache write + one cache read per later main-loop turn) |
+| Shortlist notes (est.) | size of all shortlist notes × input price × cache write |
 | Jev (measured) | Jev's logged cost |
-| net saved / extra | listing − notes − Jev |
+| Net saved / Net extra cost | listing − notes − Jev |
 
 The listing isn't logged, so its size is estimated from the skill index at about 4 characters per token. Note sizes are estimated the same way. Later turns re-reading old notes from the cache are left out.
 

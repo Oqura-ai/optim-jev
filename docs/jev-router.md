@@ -62,10 +62,25 @@ The routing section of the system prompt tells Claude how to maintain both files
 
 1. **Spawn**: Claude starts a subagent with a task. The router finds the project paths its prompt names.
 2. **Allowed models**: the models every named file's rule allows (if they conflict, the strongest any allows). With the cap on, nothing above the session's model.
-3. **Pick**: one model allowed → used directly. Several → Jev picks the least capable one that will do it correctly, given each file's `why` and the relevant `RULES.md` facts. Jev failing → the session model if allowed, else the strongest allowed.
-4. **Brief**: the subagent's prompt gets the rules and facts for its files, and the files it must never edit.
+3. **Pick**: one model allowed → used directly. Several → Jev picks the least capable one that will do it correctly, given each file's `why` and the relevant `RULES.md` facts. In the same request Jev also picks the **effort**: `low`, `medium` or `high`, plus `xhigh` when opus is possible. Jev failing → the session model if allowed, else the strongest allowed, at the session's default effort.
+4. **Brief**: the subagent's prompt gets its model and effort, the rules and facts for its files, and the files it must never edit. The effort is applied to each of the subagent's requests.
 5. **Guard**: every write and delete is checked against `rules.json` for the subagent's model. A refused write names the rule.
-6. **Escalate**: after 3 failed writes in one subagent, the next subagent for those files starts one model up. The running one isn't switched.
+6. **Escalate**: after 3 failed writes in one subagent, the next subagent for those files starts one model up at the **same effort**. The running one isn't switched. It happens once per subagent and stops at the strongest model, so it can't loop.
+
+## What Jev sees
+
+Jev's input is listed most important first, and capped (`jev_router_max_input_tokens`, default 4000). When it's over, trimming starts at the bottom of this list:
+
+| # | Field | When over the cap |
+|---|---|---|
+| 1 | the subagent's task | never cut |
+| 2 | the files it names, with each rule's `why` (no model lists: Jev is asked about the allowed models directly) | never cut |
+| 3 | the model ladder | never cut |
+| 4 | the subagent's prompt | the middle is cut, start and end kept |
+| 5 | `RULES.md` facts: General, plus sections for the named files | dropped from the end |
+| 6 | your last 4 prompts (your own text only, never Claude's replies or tool output) | oldest dropped first |
+
+If the first three alone are over the cap, Jev isn't asked: a small Claude model (`jev_router_decider_model`, default haiku, low effort) reads the untrimmed input and picks the model and effort. It costs more than Jev, so it's only the fallback. `/jev-route stats` shows how often it ran and how often Jev's input was trimmed.
 
 ## Files
 

@@ -27,7 +27,7 @@ In global scope, Claude may read the shortlisted skills' folders without asking.
 | no match | nothing extra |
 | Jev offline | the names of every skill in scope |
 
-Jev sees the prompt and Claude's previous reply, so follow-up prompts are judged in context.
+Jev sees the prompt and your 3 prompts before it (your own text only), so follow-ups are judged in context. Each request to Jev is capped (`jev_skills_max_input_tokens`, default 3000): earlier prompts are dropped oldest first, and skills are split into smaller batches so each batch fits.
 
 ## Files
 

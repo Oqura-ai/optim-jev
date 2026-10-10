@@ -5,6 +5,7 @@
 | Page | What's in it |
 |---|---|
 | [Getting started](getting-started.md) | install, API key, commands, options, troubleshooting |
+| [TinyCart demo](../demo/tinycart/DEMO.md) | a 6–8 minute walkthrough of all three tools on a toy project |
 | [Performance metrics](performance-metrics.md) | how the `stats` commands work out what each tool saved |
 
 ## The tools

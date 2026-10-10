@@ -6,6 +6,7 @@ from collections import Counter
 from typing import Any
 
 from ...core import pricing
+from ...core import report as fmt
 
 # Used only until this session has run a built-in summary of its own to measure.
 FALLBACK_OUTPUT_RATIO = 0.10  # summary output tokens / context tokens
@@ -34,20 +35,29 @@ def report(compactions: list[dict[str, Any]], claude: list[dict[str, Any]]) -> s
     out_ratio, keep_ratio, measured = _summary_shape(summaries)
     cache_read = pricing.rates(model)[0] * pricing.CACHE_READ / 1e6  # USD per token
 
-    lines = [
-        f"Compactions: {len(compactions)} · applied {actions['apply']} · deferred {actions['defer']} · "
-        f"fell back to summary {actions['summarize']}",
-        f"Jev: {requests} request(s) · {jev_in:,} input tokens · {pricing.usd(jev_usd)}",
+    usd = pricing.usd
+    spent = sum(pricing.cost(s) for s in summaries)
+    wasted = sum(c["jev"].get("cost_usd", 0.0) for c in compactions if c.get("action") == "summarize" and c.get("jev"))
+    activity = [
+        ("Compactions", str(len(compactions))),
+        ("  applied", str(actions["apply"])),
+        ("  deferred", str(actions["defer"])),
+        ("  fell back to summary", str(actions["summarize"])),
+        ("Jev requests", str(requests)),
+        ("Jev input tokens", f"{jev_in:,}"),
+        ("Jev cost", usd(jev_usd)),
     ]
     if summaries:
-        spent = sum(pricing.cost(s) for s in summaries)
-        lines.append(
-            f"Built-in summaries run: {len(summaries)} · {pricing.usd(spent)} measured · "
-            f"output {out_ratio:.1%} of context · kept {keep_ratio:.1%} of context"
-        )
-    wasted = sum(c["jev"].get("cost_usd", 0.0) for c in compactions if c.get("action") == "summarize" and c.get("jev"))
+        activity += [
+            ("Built-in summaries run", str(len(summaries))),
+            ("  their cost", usd(spent)),
+            ("  output, % of context", f"{out_ratio:.1%}"),
+            ("  context kept", f"{keep_ratio:.1%}"),
+        ]
     if wasted:
-        lines.append(f"Jev spend on rounds that still fell back to the summary: {pricing.usd(wasted)}")
+        activity.append(("Jev cost on fallbacks", usd(wasted)))
+    blocks = [fmt.table("Activity", ("Metric", "Value"), activity, right=(1,))]
+    notes = []
 
     applied = [c for c in compactions if c.get("action") == "apply"]
     if applied:
@@ -63,14 +73,24 @@ def report(compactions: list[dict[str, Any]], claude: list[dict[str, Any]]) -> s
             after = sum(1 for t in turns if c["ts"] < t["ts"] <= end)
             extra_after += after * extra_tokens * cache_read
         net = summary_usd - jev_side - extra_after
-        basis = "this session's measured summaries" if measured else "assumed 10% output / 10% kept (no summary measured yet)"
-        lines += [
-            "",
-            f"Applied Jev prunes vs. a built-in summary in their place ({basis}):",
-            f"  summary (est.)                 {pricing.usd(summary_usd)}",
-            f"  Jev (measured)                 {pricing.usd(jev_side)}",
-            f"  larger context re-read after   {pricing.usd(extra_after)}  (est., cache reads until the next compaction)",
-            f"  net {'saved' if net >= 0 else 'extra'}                      {pricing.usd(abs(net))}",
-        ]
-    lines += ["", pricing.PRICE_NOTE]
-    return "\n".join(lines)
+        blocks.append(
+            fmt.table(
+                f"Cost: {len(applied)} applied prune(s) vs a built-in summary in their place",
+                ("Item", "Basis", "USD"),
+                [
+                    ("Built-in summary", "est.", usd(summary_usd)),
+                    ("Jev pruning", "measured", usd(jev_side)),
+                    ("Larger context re-read", "est.", usd(extra_after)),
+                ],
+                right=(2,),
+                total=(fmt.net_label(net), "", usd(abs(net))),
+            )
+        )
+        notes.append(
+            "Summary size measured from this session's own summaries."
+            if measured
+            else "No summary measured yet: assumed 10% output and 10% of context kept."
+        )
+        notes.append("Re-read: the extra context Jev leaves, as cache reads until the next compaction.")
+    notes.append(pricing.PRICE_NOTE)
+    return fmt.render(*blocks, notes=notes)

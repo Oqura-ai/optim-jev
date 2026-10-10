@@ -77,22 +77,41 @@ ROSTER = [Skill(f"s{i}", f"skill number {i}", "project", "/x") for i in range(45
 class Pick(unittest.TestCase):
     def test_one_batch_is_final_and_none_sets_the_bar(self):
         jev = FakeJev({"s1": 0.5, "s2": 0.3, NONE: 0.35})
-        result = shortlist("do the thing", "", ROSTER[:5], jev, SkillsConfig())
+        result = shortlist("do the thing", [], ROSTER[:5], jev, SkillsConfig())
         self.assertEqual([s.name for s, _ in result.picks], ["s1"])  # s2 is under "none"
         self.assertEqual(result.calls, 1)
 
     def test_many_batches_get_a_second_round_over_the_leaders(self):
         jev = FakeJev({"s3": 0.6, "s25": 0.5, "s40": 0.2, NONE: 0.1})
         config = SkillsConfig(prefilter_above=100)
-        result = shortlist("do the thing", "", ROSTER, jev, config)
+        result = shortlist("do the thing", [], ROSTER, jev, config)
         self.assertEqual(len(jev.seen), 4)  # 3 batches + the final round
         self.assertEqual(sorted(jev.seen[-1]), sorted(["s3", "s25", "s40", NONE]))
         self.assertEqual([s.name for s, _ in result.picks], ["s3", "s25"])
 
     def test_prefilter_keeps_the_closest_descriptions(self):
         jev = FakeJev({NONE: 1.0})
-        shortlist("skill number 7", "", ROSTER, jev, SkillsConfig(prefilter_above=20))
+        shortlist("skill number 7", [], ROSTER, jev, SkillsConfig(prefilter_above=20))
         self.assertEqual(sum(len(o) - 1 for o in jev.seen[:1]), 20)
+
+    def test_recent_user_inputs_reach_jev_oldest_first(self):
+        states = []
+
+        class Spy(FakeJev):
+            def ask(self, state, questions):
+                states.append(state)
+                return super().ask(state, questions)
+
+        shortlist("do the thing", ["first prompt", "second prompt"], ROSTER[:5], Spy({}), SkillsConfig())
+        self.assertEqual(states[0]["recent_user_inputs"], ["first prompt", "second prompt"])
+        self.assertNotIn("previous_assistant_message", states[0])
+
+    def test_tight_budget_makes_smaller_batches(self):
+        roomy, tight = FakeJev({"none": 1.0}), FakeJev({"none": 1.0})
+        shortlist("do the thing", [], ROSTER, roomy, SkillsConfig())
+        shortlist("do the thing", [], ROSTER, tight, SkillsConfig(max_input_tokens=220))
+        self.assertGreater(len(tight.seen), len(roomy.seen))
+        self.assertLess(max(len(options) for options in tight.seen), 21)
 
     def test_jev_failure_returns_no_picks_and_the_note_lists_names(self):
         root = Path(tempfile.mkdtemp())
