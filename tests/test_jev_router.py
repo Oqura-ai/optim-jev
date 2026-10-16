@@ -215,6 +215,9 @@ class Spawn(unittest.TestCase):
     def test_a_windows_path_keeps_its_drive(self):
         self.assertEqual(policy._PATH.findall(r"edit C:\proj\src\a.py and d:/x/y.md"), [r"C:\proj\src\a.py", "d:/x/y.md"])
 
+    def test_a_drive_letter_counts_only_before_a_separator(self):
+        self.assertEqual(policy._PATH.findall(r"see C:src\a.py"), [r"src\a.py"])
+
     def test_a_long_token_is_scanned_without_backtracking(self):
         start = time.perf_counter()
         policy._PATH.findall("a" * 20000 + " " + "." * 20000)
