@@ -1,0 +1,30 @@
+{
+  "name": "optim-jev",
+  "version": "0.1.0",
+  "description": "Jev-based model routing for Codex and token-usage optimization for Claude Code workflows.",
+  "author": {
+    "name": "oqura.ai",
+    "url": "https://github.com/Oqura-ai"
+  },
+  "homepage": "https://github.com/Oqura-ai/optim-jev",
+  "repository": "https://github.com/Oqura-ai/optim-jev",
+  "license": "MIT",
+  "keywords": [
+    "codex",
+    "model-routing",
+    "token-optimization"
+  ],
+  "hooks": "./hooks/codex-hooks.json",
+  "interface": {
+    "displayName": "optim-jev",
+    "shortDescription": "Route Codex subagents with Jev and project policy.",
+    "longDescription": "Selects models and reasoning effort for Codex subagents while preserving project-specific path rules. Claude Code also supports compaction and skill shortlisting.",
+    "developerName": "oqura.ai",
+    "category": "Developer Tools",
+    "capabilities": [
+      "Interactive",
+      "Read",
+      "Write"
+    ]
+  }
+}

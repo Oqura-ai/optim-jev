@@ -17,6 +17,7 @@ import json
 import os
 import sys
 from collections import Counter
+from pathlib import Path
 from typing import Any
 
 from ...core import logs, pricing, report
@@ -38,13 +39,43 @@ def _config(request: dict[str, Any]) -> SkillsConfig:
     return SkillsConfig.from_mapping(values)
 
 
-def _append(project: str, session_id: str, record: dict[str, Any]) -> None:
-    logs.append(logs.session_file(project, LOG_TOOL, session_id), {"session_id": session_id, **record})
+def _roots(request: dict[str, Any]) -> list[index.SkillRoot] | None:
+    raw = request.get("skill_roots")
+    if not isinstance(raw, list):
+        return None
+    roots = []
+    for item in raw:
+        if not isinstance(item, dict) or not isinstance(item.get("path"), str):
+            continue
+        roots.append(
+            index.SkillRoot(
+                str(item.get("source") or "host"),
+                str(item.get("prefix") or ""),
+                Path(item["path"]),
+            )
+        )
+    return roots
+
+
+def _host(request: dict[str, Any]) -> str:
+    return str(request.get("host") or "claude").lower()
+
+
+def _log_tool(host: str) -> str:
+    return LOG_TOOL if host in ("", "claude") else f"{LOG_TOOL}_{host}"
+
+
+def _append(project: str, session_id: str, record: dict[str, Any], *, host: str = "claude") -> None:
+    logs.append(
+        logs.session_file(project, _log_tool(host), session_id),
+        {"session_id": session_id, **record},
+        locked=host not in ("", "claude"),
+    )
 
 
 def index_mode(request: dict[str, Any]) -> dict[str, Any]:
     config = _config(request)
-    roster = index.load(request["project_dir"], config.is_global)
+    roster = index.load(request["project_dir"], config.is_global, _roots(request), host=_host(request))
     return {
         "count": len(roster),
         # Folders outside the project whose files Claude may read without asking (global scope).
@@ -53,12 +84,16 @@ def index_mode(request: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _note(picks: list[dict[str, Any]], names: list[str] | None) -> str:
+def _note(picks: list[dict[str, Any]], names: list[str] | None, host: str = "claude") -> str:
     if picks:
         lines = ["optim-jev skill picker (Jev) shortlisted these skills for this request:"]
         for p in picks:
             lines.append(f"- {p['name']} ({p['percent']}%): {p['description']}")
-        lines.append("If one fits, load it with the Skill tool; otherwise carry on without a skill.")
+        lines.append(
+            "If one fits, use that skill's instructions; otherwise carry on without it."
+            if host == "codex"
+            else "If one fits, load it with the Skill tool; otherwise carry on without a skill."
+        )
         return "\n".join(lines)
     if names is not None:
         return "optim-jev skill picker is offline this turn. Available skills: " + ", ".join(names)
@@ -68,7 +103,8 @@ def _note(picks: list[dict[str, Any]], names: list[str] | None) -> str:
 def shortlist_mode(request: dict[str, Any]) -> dict[str, Any]:
     config = _config(request)
     project = request["project_dir"]
-    roster = index.load(project, config.is_global)
+    host = _host(request)
+    roster = index.load(project, config.is_global, _roots(request), host=host)
     asker = JevClient(model=config.model, base_url=config.base_url, timeout=20.0)
     recent = [str(t) for t in request.get("recent_inputs") or () if isinstance(t, str)]
     result = shortlist(str(request.get("prompt") or ""), recent, roster, asker, config)
@@ -91,10 +127,15 @@ def shortlist_mode(request: dict[str, Any]) -> dict[str, Any]:
             "trimmed": result.trimmed,
             "jev": asker.usage(),
         },
+        host=host,
     )
     return {
         "picks": [p["name"] for p in picks],
-        "context": _note(picks, [s.name for s in roster] if result.failed and roster else None),
+        "context": _note(
+            picks,
+            [s.name for s in roster] if host == "claude" and result.failed and roster else None,
+            host,
+        ),
         "failed": result.failed,
     }
 
@@ -108,13 +149,18 @@ def loaded_mode(request: dict[str, Any]) -> dict[str, Any]:
             "skill": request.get("skill"),
             "shortlisted": bool(request.get("shortlisted")),
         },
+        host=_host(request),
     )
     return {}
 
 
 def why_mode(request: dict[str, Any]) -> dict[str, Any]:
-    path = logs.session_file(request["project_dir"], LOG_TOOL, str(request.get("session_id") or ""))
-    mine = [r for r in logs.read(path) if r.get("kind") == "shortlist"]
+    path = logs.session_file(
+        request["project_dir"],
+        _log_tool(_host(request)),
+        str(request.get("session_id") or ""),
+    )
+    mine = [r for r in logs.read(path, locked=_host(request) != "claude") if r.get("kind") == "shortlist"]
     if not mine:
         return {"text": "jev-skills: no shortlist yet in this session"}
     r = mine[-1]
@@ -127,7 +173,15 @@ def why_mode(request: dict[str, Any]) -> dict[str, Any]:
 
 
 def stats_mode(request: dict[str, Any]) -> dict[str, Any]:
-    records = logs.read(logs.session_file(request["project_dir"], LOG_TOOL, str(request.get("session_id") or "")))
+    host = _host(request)
+    records = logs.read(
+        logs.session_file(
+            request["project_dir"],
+            _log_tool(host),
+            str(request.get("session_id") or ""),
+        ),
+        locked=host != "claude",
+    )
     lists = [r for r in records if r.get("kind") == "shortlist"]
     if not lists:
         return {"text": "jev-skills: nothing logged yet in this session"}
@@ -143,6 +197,15 @@ def stats_mode(request: dict[str, Any]) -> dict[str, Any]:
     blocks = [report.table("Activity", ("Metric", "Value"), activity, right=(1,))]
     if top:
         blocks.append(report.table("Most shortlisted", ("Skill", "Times"), [(n, str(c)) for n, c in top], right=(1,)))
+    if request.get("host") == "codex":
+        return {
+            "text": report.render(
+                *blocks,
+                notes=[
+                    "Codex keeps its native skill catalog; shortlist benefit and model-token cost are not measured."
+                ],
+            )
+        }
     cost, notes = _cost(request, lists)
     return {"text": report.render(*blocks, cost, notes=notes)}
 
@@ -154,7 +217,7 @@ def _tokens(text: str) -> int:
 def _cost(request: dict[str, Any], lists: list[dict[str, Any]]) -> tuple[list[str], list[str]]:
     """The built-in skill listing, re-sent with every request, vs. Jev's shortlist notes and calls."""
     project, session_id = request["project_dir"], str(request.get("session_id") or "")
-    roster = index.load(project, _config(request).is_global)
+    roster = index.load(project, _config(request).is_global, _roots(request), host=_host(request))
     claude = pricing.claude_log(project, session_id)
     model = pricing.main_model(claude)
     turns = len(pricing.main_turns(claude))

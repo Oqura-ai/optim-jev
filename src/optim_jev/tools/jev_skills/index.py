@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import os
 import re
+from collections.abc import Sequence
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
@@ -28,6 +29,13 @@ class Skill:
     description: str
     source: str  # project | user | plugin:<name>
     dir: str
+
+
+@dataclass(frozen=True)
+class SkillRoot:
+    source: str
+    prefix: str
+    path: Path
 
 
 def skills_dir(project_dir: str | os.PathLike[str]) -> Path:
@@ -52,12 +60,12 @@ def _plugin_roots() -> list[tuple[str, Path]]:
     return roots
 
 
-def sources(project_dir: str | os.PathLike[str], is_global: bool) -> list[tuple[str, str, Path]]:
-    """(source, name prefix, skills folder) in priority order: project first."""
-    found = [("project", "", Path(project_dir) / ".claude" / "skills")]
+def sources(project_dir: str | os.PathLike[str], is_global: bool) -> list[SkillRoot]:
+    """Claude skill roots in priority order; callers for other hosts pass their own roots to `load`."""
+    found = [SkillRoot("project", "", Path(project_dir) / ".claude" / "skills")]
     if is_global:
-        found.append(("user", "", _home() / "skills"))
-        found += [(f"plugin:{name}", f"{name}:", root / "skills") for name, root in _plugin_roots()]
+        found.append(SkillRoot("user", "", _home() / "skills"))
+        found += [SkillRoot(f"plugin:{name}", f"{name}:", root / "skills") for name, root in _plugin_roots()]
     return found
 
 
@@ -71,18 +79,37 @@ def parse(text: str) -> tuple[str, str] | None:
     return name.group(1).strip().strip("\"'"), description[:MAX_DESCRIPTION_CHARS]
 
 
-def _files(project_dir: str | os.PathLike[str], is_global: bool) -> list[tuple[str, str, Path]]:
+def _files(
+    project_dir: str | os.PathLike[str],
+    is_global: bool,
+    roots: Sequence[SkillRoot] | None = None,
+) -> list[tuple[str, str, Path]]:
     files = []
-    for source, prefix, folder in sources(project_dir, is_global):
-        for md in sorted(folder.glob("*/SKILL.md")) if folder.is_dir() else []:
-            files.append((source, prefix, md))
+    for root in roots if roots is not None else sources(project_dir, is_global):
+        for md in sorted(root.path.glob("*/SKILL.md")) if root.path.is_dir() else []:
+            files.append((root.source, root.prefix, md))
     return files
 
 
-def load(project_dir: str | os.PathLike[str], is_global: bool) -> list[Skill]:
-    files = _files(project_dir, is_global)
-    signature = [[str(md), md.stat().st_mtime_ns] for _, _, md in files]
-    cache = skills_dir(project_dir) / INDEX_FILE
+def load(
+    project_dir: str | os.PathLike[str],
+    is_global: bool,
+    roots: Sequence[SkillRoot] | None = None,
+    *,
+    host: str = "claude",
+) -> list[Skill]:
+    files = _files(project_dir, is_global, roots)
+    normalized_host = host.strip().lower()
+    signature = (
+        [[str(markdown), markdown.stat().st_mtime_ns] for _, _, markdown in files]
+        if normalized_host in ("", "claude")
+        else [
+            [source, prefix, str(markdown), markdown.stat().st_mtime_ns]
+            for source, prefix, markdown in files
+        ]
+    )
+    cache_name = INDEX_FILE if normalized_host in ("", "claude") else f"index.{normalized_host}.json"
+    cache = skills_dir(project_dir) / cache_name
     try:
         cached = json.loads(cache.read_text(encoding="utf-8"))
         if cached.get("global") == is_global and cached.get("signature") == signature:

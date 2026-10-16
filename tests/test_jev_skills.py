@@ -60,6 +60,8 @@ class Index(unittest.TestCase):
 
     def test_project_scope_reads_only_the_project(self):
         self.assertEqual([s.name for s in index.load(self.root, False)], ["deploy"])
+        cached = json.loads((self.root / ".optim-jev/jev_skills/index.json").read_text())
+        self.assertEqual(len(cached["signature"][0]), 2)
 
     def test_global_scope_adds_user_and_plugin_skills_and_their_folders(self):
         roster = index.load(self.root, True)
@@ -69,6 +71,20 @@ class Index(unittest.TestCase):
 
     def test_block_scalar_descriptions_are_joined(self):
         self.assertEqual(index.load(self.root, False)[0].description, "Ship the app to staging")
+
+    def test_explicit_roots_are_host_agnostic(self):
+        codex = self.root / ".agents/skills"
+        write_skill(codex, "review", "Review a patch")
+        roots = [index.SkillRoot("codex-project", "", codex)]
+        index.load(self.root, False)
+        self.assertEqual(
+            [(s.name, s.source) for s in index.load(self.root, False, roots, host="codex")],
+            [("review", "codex-project")],
+        )
+        self.assertTrue((self.root / ".optim-jev/jev_skills/index.codex.json").is_file())
+        self.assertTrue((self.root / ".optim-jev/jev_skills/index.json").is_file())
+        cached = json.loads((self.root / ".optim-jev/jev_skills/index.codex.json").read_text())
+        self.assertEqual(len(cached["signature"][0]), 4)
 
 
 ROSTER = [Skill(f"s{i}", f"skill number {i}", "project", "/x") for i in range(45)]

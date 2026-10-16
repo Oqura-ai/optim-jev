@@ -5,9 +5,20 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "optim-jev"
 version = "0.1.0"
-description = "Token-usage optimization tools for Claude Code workflows."
+description = "Jev-powered optimization tools for Claude Code and OpenAI Codex workflows."
+readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "MIT" }
+authors = [{ name = "oqura.ai" }]
+keywords = ["codex", "claude-code", "model-routing", "token-optimization"]
+
+[project.scripts]
+optim-jev = "optim_jev.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/Oqura-ai/optim-jev"
+Repository = "https://github.com/Oqura-ai/optim-jev"
+Documentation = "https://github.com/Oqura-ai/optim-jev/tree/main/docs"
 
 [tool.setuptools.packages.find]
 where = ["src"]

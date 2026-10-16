@@ -1,0 +1,20 @@
+{
+  "name": "optim-jev",
+  "interface": {
+    "displayName": "optim-jev"
+  },
+  "plugins": [
+    {
+      "name": "optim-jev",
+      "source": {
+        "source": "local",
+        "path": "./codex-plugin"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Developer Tools"
+    }
+  ]
+}
