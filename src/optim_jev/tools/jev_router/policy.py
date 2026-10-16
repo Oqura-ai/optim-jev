@@ -9,6 +9,8 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
+from urllib.request import url2pathname
 
 from ..jev_compacter.types import JevAsker, JevCompactionError, JevQuestions
 from ...core.budget import Field, OverBudget, fit, middle, tokens_of
@@ -65,13 +67,22 @@ class Pick:
     ask_claude: str | None = None
 
 
+_URL = re.compile(r"[A-Za-z][A-Za-z0-9+.-]*://\S+")
+
+
+def _url_as_path(match: re.Match[str]) -> str:
+    url = match.group()
+    return url2pathname(urlparse(url).path) if url[:5].lower() == "file:" else " "
+
+
 def mentioned_files(text: str, rules: Rules, project_dir: str) -> list[FilePlan]:
     """Project paths the prompt names: existing files or directories, or paths under a rule."""
     root = Path(project_dir)
     found: dict[str, FilePlan] = {}
-    for token in _PATH.findall(text):
+    # A file URL becomes its local path and any other URL is dropped: _PATH would split either into a bogus path.
+    for token in _PATH.findall(_URL.sub(_url_as_path, text)):
         token = token.strip(".,:;'\"`()[]{}<>")
-        if not token or "://" in token:
+        if not token:
             continue
         rel = relative(token, project_dir).rstrip("/")
         if not rel or rel.startswith("../") or rel in found:

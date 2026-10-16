@@ -7,6 +7,7 @@ import tempfile
 import time
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from optim_jev.tools.jev_router import context as context_mod, journal, policy, rules as rules_mod, scan, tool, writer
 from optim_jev.tools.jev_router.catalog import build_ladder
@@ -296,6 +297,16 @@ class Spawn(unittest.TestCase):
         self.assertIn("prices are integer cents", answer["appendix"])
         self.assertIn("core index → opus", journal.why(journal.read(self.root, "s"), "s"))
         self.assertTrue((Path(self.root) / ".optim-jev" / "logs" / "jev_router" / "s.jsonl").is_file())
+
+    def test_a_file_url_in_the_prompt_names_its_file(self):
+        url = (self.root / "src/api/auth.py").as_uri()
+        self.assertEqual([f.path for f in policy.mentioned_files(f"Review {url}", self.rules, str(self.root))], ["src/api/auth.py"])
+
+    def test_a_web_url_in_the_prompt_names_no_file_and_is_never_looked_up(self):
+        with mock.patch.object(Path, "exists", return_value=False) as exists:
+            files = policy.mentioned_files("See https://example.com/src/api/auth.py and http://host/README.md", self.rules, str(self.root))
+        self.assertEqual(files, [])
+        exists.assert_not_called()
 
 
 class Report(unittest.TestCase):
