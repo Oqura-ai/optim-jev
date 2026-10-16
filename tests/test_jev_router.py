@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import tempfile
+import time
 import unittest
 from pathlib import Path
 
@@ -213,6 +214,11 @@ class Spawn(unittest.TestCase):
 
     def test_a_windows_path_keeps_its_drive(self):
         self.assertEqual(policy._PATH.findall(r"edit C:\proj\src\a.py and d:/x/y.md"), [r"C:\proj\src\a.py", "d:/x/y.md"])
+
+    def test_a_long_token_is_scanned_without_backtracking(self):
+        start = time.perf_counter()
+        policy._PATH.findall("a" * 20000 + " " + "." * 20000)
+        self.assertLess(time.perf_counter() - start, 0.1)
 
     def test_one_allowed_model_asks_jev_only_for_effort_and_blocked_files_are_named(self):
         jev = FakeJev({"haiku": 1.0}, effort={"high": 0.8, "low": 0.2})

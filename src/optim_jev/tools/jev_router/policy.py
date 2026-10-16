@@ -17,7 +17,8 @@ from .render import rule_rows
 from .rules import Rule, Rules, relative, resolve
 
 # Path-like tokens in a prompt: something with a slash (a Windows path keeps its drive) or a name with an extension.
-_PATH = re.compile(r"(?:\b[A-Za-z]:)?[\w.@~-]*[\\/][\w.@~/\\-]+|[\w.@-]+\.[A-Za-z][\w]{0,7}\b")
+# A match starts only where a token does (or at a drive letter), so findall never rescans a token from inside it.
+_PATH = re.compile(r"(?:\b[A-Za-z]:|(?<![\w.@~-]))[\w.@~-]*[\\/][\w.@~/\\-]+|(?<![\w.@-])[\w.@-]+\.[A-Za-z][\w]{0,7}\b")
 MAX_PROMPT_CHARS = 6000
 
 
