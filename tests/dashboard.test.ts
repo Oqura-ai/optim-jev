@@ -85,7 +85,7 @@ function engine(on: On, settings: EngineSettings = {}) {
   on('session.model', () => ({ value: 'claude-sonnet-5-5' }));
   on('session.messages', () => ({ value: [] }));
   on('session.usage', () => ({
-    value: { context: { tokens: percent * 2_000, window: 200_000, percent } },
+    value: { startedAt: 0, context: { tokens: percent * 2_000, window: 200_000, percent }, rateLimits: [] },
   }));
   on('store.get', (_$, e) => ({ value: store.get(e.key) }));
   on('store.set', (_$, e) => {
@@ -94,7 +94,7 @@ function engine(on: On, settings: EngineSettings = {}) {
   });
   on('env.get', () => ({ value: undefined }));
   on('settings.read', () => ({ value: {} }));
-  on('tool.list', () => ({ value: [{ name: 'ListSkills', description: '' }] }));
+  on('tool.list', () => ({ value: [{ name: 'ListSkills', description: '', mcp: false }] }));
   on('command.register', (_$, e) => ({ value: { command: e.name } }));
   on('command.run', (_$, e) => {
     seen.commands.push(`${e.command} ${e.args}`.trim());
@@ -401,7 +401,7 @@ describe('optim-jev dashboard', () => {
   test('shows the latest compaction outcome', { options: { jev_dashboard_mode: 'on' } }, async ($, on) => {
     engine(on);
     await $.session.start(START);
-    await $.session.compact({});
+    await $.session.compact({ trigger: 'plugin', messages: [] });
     const band = await $.ui.mount(BAND);
     expect(JSON.stringify(await band.drawn())).toContain('deferred ~14k');
     await band.unmount();
