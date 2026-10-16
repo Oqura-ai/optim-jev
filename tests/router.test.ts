@@ -137,7 +137,7 @@ describe('jev-router', () => {
     const agent = await $.agent.spawn(spawn('Fix src/api/a.py', 'fix a'));
     for (let i = 0; i < 3; i++) await $.tool.call(byAgent(agent.agentId));
     await $.agent.spawn(spawn('Fix src/api/a.py again', 'fix a again'));
-    expect(seen.requests.at(-1)).toMatchObject({ escalated: { 'src/api/a.py': 1 } });
+    expect(seen.requests.at(-1)).toMatchObject({ escalated: { 'src/api/a.py': { levels: 1, effort: null } } });
   });
 
   test('off: no section, no gate, spawns untouched', { options: { jev_router_mode: 'off' } }, async ($, on) => {

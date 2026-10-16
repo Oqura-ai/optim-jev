@@ -247,6 +247,12 @@ def pick(
         answers = asker.ask(fitted.state, questions)["answers"]
         probs = choice_probabilities(answers, "model", options) if "model" in questions else {}
     except JevCompactionError as err:
+        if "model" not in questions:
+            # The rules (or an escalation) already fixed the model; only the effort question failed.
+            return done(
+                options[0], "escalation" if boost else "rules", jev_failed=str(err),
+                input_tokens_est=fitted.tokens, trimmed=fitted.trimmed,
+            )
         return done(
             _fallback(options, ladder), "fallback", jev_failed=str(err),
             input_tokens_est=fitted.tokens, trimmed=fitted.trimmed,
