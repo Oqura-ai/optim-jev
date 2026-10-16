@@ -67,6 +67,8 @@ The routing section of the system prompt tells Claude how to maintain both files
 5. **Guard**: every write and delete is checked against `rules.json` for the subagent's model. A refused write names the rule.
 6. **Escalate**: after 3 failed writes in one subagent, the next subagent for those files starts one model up at the **same effort**. The running one isn't switched. It happens once per subagent and stops at the strongest model, so it can't loop.
 
+A subagent Claude resumes (with `SendMessage`, say) isn't routed again: Claude Code keeps the model it started on and ignores a new one, so Jev isn't asked and nothing is logged or toasted. A routed subagent gets the routed effort only while it runs on the routed model.
+
 ## What Jev sees
 
 Jev's input is listed most important first, and capped (`jev_router_max_input_tokens`, default 4000). When it's over, trimming starts at the bottom of this list:
