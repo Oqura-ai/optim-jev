@@ -211,6 +211,9 @@ class Spawn(unittest.TestCase):
         self.assertEqual((result.model, result.source), ("sonnet", "jev"))
         self.assertEqual(sorted(jev.questions["model"]["criteria"]), ["opus", "sonnet"])
 
+    def test_a_windows_path_keeps_its_drive(self):
+        self.assertEqual(policy._PATH.findall(r"edit C:\proj\src\a.py and d:/x/y.md"), [r"C:\proj\src\a.py", "d:/x/y.md"])
+
     def test_one_allowed_model_asks_jev_only_for_effort_and_blocked_files_are_named(self):
         jev = FakeJev({"haiku": 1.0}, effort={"high": 0.8, "low": 0.2})
         result = self.pick("Index src/core/db.py; regenerate src/gen/pb.py", jev)
