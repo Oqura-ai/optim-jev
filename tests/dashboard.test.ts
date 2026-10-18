@@ -482,4 +482,32 @@ describe('optim-jev dashboard', () => {
     await $.session.start(START);
     expect(seen.statuses.at(-1)).toContain('◆ jev · compact on · router off · skills off');
   });
+
+  test(
+    'vscode: the dashboard draws in the chat panel and its buttons work',
+    { options: { jev_dashboard_mode: 'on', jev_router_mode: 'on', jev_skills_mode: 'on', jev_skills_scope: 'global' } },
+    async ($, on) => {
+      const seen = engine(on);
+      await $.session.start({ ...START, surface: 'vscode' } as never);
+      await $.prompt.submit({ text: 'Design a polished dashboard for this project', origin: { kind: 'composer' }, wait: false });
+      await $.agent.spawn(spawn());
+      const band = await $.ui.mount({ ...(BAND as object), surface: 'vscode' } as never);
+      const text = JSON.stringify(await band.drawn());
+      expect(text).toContain('Context 42%');
+      expect(text).toContain('update docs → Haiku via rules');
+      await band.press({ key: 'dashboard-router' });
+      await band.redraw();
+      expect(JSON.stringify(await band.drawn())).toContain('Router off');
+      await band.press({ key: 'dashboard-compact' });
+      expect(seen.commands).toContain('compact');
+      await band.unmount();
+
+      const output = await $.ui.mount({
+        plugin: 'optim-jev', surface: 'vscode', component: 'CommandOutput',
+        props: { command: 'jev-route', args: 'stats', text: 'Routed subagents: 3 · haiku 67% · sonnet 33%\n  net saved   $1.25', isErrored: false },
+      } as never);
+      expect(JSON.stringify(await output.drawn())).toContain('Router stats');
+      await output.unmount();
+    },
+  );
 });
