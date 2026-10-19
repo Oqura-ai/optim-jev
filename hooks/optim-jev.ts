@@ -815,6 +815,8 @@ function registerRouter(on: On, pluginOptions: PluginOptions): void {
   });
 
   on('agent.spawn', async ($, e, next) => {
+    // Claude Code keeps a resumed subagent's model and ignores a new one, so a resume isn't routed again.
+    if (e.resume) return next(e);
     const routed = await routeSpawn($, e);
     const result = await next({
       ...e,
@@ -822,9 +824,15 @@ function registerRouter(on: On, pluginOptions: PluginOptions): void {
       ...(routed.prompt ? { prompt: routed.prompt } : {}),
     });
     if (routed.model && result.agentId) {
-      agentModels.set(result.agentId, aliasOf(result.model) ?? routed.model);
+      const ranOn = aliasOf(result.model) ?? routed.model;
+      agentModels.set(result.agentId, ranOn);
       agentFiles.set(result.agentId, routed.files);
-      if (routed.effort) agentEfforts.set(result.agentId, routed.effort);
+      // Jev chose the effort for the routed model, so it only applies if the subagent runs on it.
+      if (ranOn === routed.model) {
+        if (routed.effort) agentEfforts.set(result.agentId, routed.effort);
+      } else {
+        $.ui.log(`jev-router: “${e.description}” was routed to ${routed.model} but kept ${ranOn}`, { to: 'debug' });
+      }
       // Ties this agent's `turn` records to the router's spawn record.
       usageBuffer.push({
         ts: Math.round(Date.now() / 1000),
