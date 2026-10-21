@@ -2,11 +2,12 @@
 
 # optim-jev
 
-**Spend fewer tokens in long Claude Code sessions—without changing how you work.**
+**Spend fewer tokens in long agent sessions without changing how you work.**
 
-Jev-powered context compaction, model routing, and skill selection in one Claude Code plugin.
+Jev-powered optimization for Claude Code, plus model routing for OpenAI Codex.
 
 [![Claude Code plugin](https://img.shields.io/badge/Claude_Code-plugin-D97757?style=flat-square)](https://code.claude.com/docs/en/overview)
+[![Codex plugin](https://img.shields.io/badge/OpenAI_Codex-plugin-111827?style=flat-square)](https://developers.openai.com/codex/plugins)
 [![Python 3.10+](https://img.shields.io/badge/Python-3.10%2B-3776AB?style=flat-square&logo=python&logoColor=white)](https://www.python.org/downloads/)
 [![GitHub stars](https://img.shields.io/github/stars/Oqura-ai/optim-jev?style=flat-square&logo=github&label=Stars)](https://github.com/Oqura-ai/optim-jev/stargazers)
 [![GitHub forks](https://img.shields.io/github/forks/Oqura-ai/optim-jev?style=flat-square&logo=github&label=Forks)](https://github.com/Oqura-ai/optim-jev/forks)
@@ -14,7 +15,7 @@ Jev-powered context compaction, model routing, and skill selection in one Claude
 [![License: MIT](https://img.shields.io/badge/License-MIT-22C55E?style=flat-square)](#license)
 [![Our Discord](https://img.shields.io/badge/Discord-Join%20Community-5865F2?style=flat-square&logo=discord&logoColor=white)](https://discord.gg/EpUxGjNBva)
 
-[Get started](#quick-start) · [Documentation](docs/README.md) · [Architecture](docs/architecture.md) · [Contributing](docs/contributing.md)
+[Get started](#claude-code-quick-start) · [Codex support](docs/codex.md) · [Documentation](docs/README.md) · [Architecture](docs/architecture.md) · [Contributing](docs/contributing.md)
 
 <img src="assets/demo.gif" alt="optim-jev demo in Claude Code" width="100%">
 
@@ -24,17 +25,17 @@ Jev-powered context compaction, model routing, and skill selection in one Claude
 
 <img src="assets/optim-jev.png" alt="optim-jev architecture: context compaction, model routing, and skill selection" width="100%">
 
-Long agent sessions accumulate stale tool output, send oversized skill catalogs, and use the main model for work a smaller model could handle. optim-jev reduces that overhead at three points while keeping Claude Code's normal workflow intact.
+Long agent sessions accumulate stale tool output, send oversized skill catalogs, and use the main model for work a smaller model could handle. Claude Code supports all three optimizers below. Codex supports the model router and an off-by-default advisory skill experiment.
 
-Each tool works independently, fails open if unavailable, and includes a `stats` command that reports session-level cost and savings in US dollars.
+Each tool works independently and fails open if unavailable. Measured cost reports remain Claude-only.
 
-## Three tools, one plugin
+## Three tools, one project
 
-| Tool | What it does | Default | Learn more |
-|---|---|:---:|---|
-| **jev-compacter** | Removes stale tool calls and outputs instead of summarizing away the whole conversation | On | [Guide](docs/jev-compacter.md) |
-| **jev-router** | Routes file changes to the right model using project-specific rules that evolve with your workflow | Off | [Guide](docs/jev-router.md) |
-| **jev-skills** | Sends a short, relevant skill list for each prompt instead of the entire catalog | Off | [Guide](docs/jev-skills.md) |
+| Tool | What it does | Available in | Claude default | Learn more |
+|---|---|---|:---:|---|
+| **jev-compacter** | Removes stale tool calls and outputs instead of summarizing away the whole conversation | Claude Code | On | [Guide](docs/jev-compacter.md) |
+| **jev-router** | Routes file changes to the right model using project-specific rules that evolve with your workflow | Claude Code and Codex | Off | [Guide](docs/jev-router.md) |
+| **jev-skills** | Sends a short, relevant skill list for each prompt instead of the entire catalog | Claude Code; experimental advisory mode in Codex | Off | [Guide](docs/jev-skills.md) |
 
 <details>
 <summary><strong>jev-compacter — preserve useful context</strong></summary>
@@ -80,7 +81,7 @@ Tell Claude to change a preference later—for example, “let haiku edit the te
 
 </details>
 
-## Quick start
+## Claude Code quick start
 
 ### Requirements
 
@@ -107,11 +108,58 @@ Restart Claude Code. jev-compacter is ready immediately; enable the router and s
 > [!NOTE]
 > The plugin uses only Python's standard library. Your API key is passed to child processes through the environment and is never written to project files or logs.
 
+## OpenAI Codex support — new
+
+Start with the complete [Codex guide](docs/codex.md) for installation, usage, model-tier setup,
+verification, limitations, troubleshooting, and uninstall steps.
+
+optim-jev can automatically route each Codex subagent to an account-specific `fast`, `balanced`, or
+`strong` model. It also selects reasoning effort, applies project path rules, escalates after
+failures, and can provide an optional advisory skill shortlist. Claude and Codex keep separate
+model catalogues, policies, caches, and logs.
+
+> [!IMPORTANT]
+> **Compaction is not supported in Codex.** Codex hooks cannot replace live conversation history.
+> The AbovePrompt dashboard, slash commands, and measured token and cost reports are also
+> Claude-only.
+
+### Install and use
+
+Codex CLI 0.162.1 or newer can install optim-jev directly from GitHub. No PyPI release or manual
+clone is required.
+
+```powershell
+py -3 -m pip install "https://github.com/Oqura-ai/optim-jev/archive/refs/heads/main.zip"
+optim-jev codex install
+
+$env:TYPESAFE_API_KEY = "your-key"
+cd C:\path\to\your-project
+optim-jev codex setup
+optim-jev codex status
+codex
+```
+
+On the first Codex launch after install or update, run `/hooks`, review and trust every optim-jev
+hook, then restart Codex.
+
+Inside Codex, subagent routing is automatic. Check the most recent decision or control project
+features with:
+
+```text
+!optim-jev codex why
+!optim-jev codex status
+!optim-jev codex on
+!optim-jev codex off
+!optim-jev codex skills-on
+!optim-jev codex skills-off
+```
+
 ## Documentation
 
 | Resource | What you will find |
 |---|---|
 | [Getting started](docs/getting-started.md) | Installation, configuration, commands, and troubleshooting |
+| [Codex support](docs/codex.md) | Codex installation, router setup, configuration, and limitations |
 | [TinyCart demo](demo/tinycart/DEMO.md) | A short, repeatable showcase of all three tools on a toy project |
 | [Performance metrics](docs/performance-metrics.md) | How token usage, cost, and estimated savings are calculated |
 | [Architecture](docs/architecture.md) | The TypeScript-to-Python bridge, data flow, and session logs |
@@ -129,6 +177,6 @@ optim-jev is released under the MIT License.
 
 <div align="center">
 
-Built by [Oqura.ai](https://github.com/Oqura-ai) for more efficient Claude Code workflows.
+Built by [Oqura.ai](https://github.com/Oqura-ai) for more efficient coding-agent workflows.
 
 </div>

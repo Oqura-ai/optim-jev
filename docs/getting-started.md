@@ -1,5 +1,7 @@
 # Getting started
 
+This page covers Claude Code. For OpenAI Codex model routing, see [Codex support](codex.md).
+
 ## Requirements
 
 - Claude Code with plugin support

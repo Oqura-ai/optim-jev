@@ -1,0 +1,56 @@
+{
+  "description": "optim-jev Codex lifecycle adapter",
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "startup|resume|clear|compact",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 -c \"import os,runpy;runpy.run_path(os.path.join(os.environ['PLUGIN_ROOT'],'hooks','run-codex-hook.py'),run_name='__main__')\"",
+            "commandWindows": "py -3 -c \"import os,runpy;runpy.run_path(os.path.join(os.environ['PLUGIN_ROOT'],'hooks','run-codex-hook.py'),run_name='__main__')\"",
+            "timeout": 40
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 -c \"import os,runpy;runpy.run_path(os.path.join(os.environ['PLUGIN_ROOT'],'hooks','run-codex-hook.py'),run_name='__main__')\"",
+            "commandWindows": "py -3 -c \"import os,runpy;runpy.run_path(os.path.join(os.environ['PLUGIN_ROOT'],'hooks','run-codex-hook.py'),run_name='__main__')\"",
+            "timeout": 90
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "spawn_agent|collaborationspawn_agent|Agent|apply_patch|Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 -c \"import os,runpy;runpy.run_path(os.path.join(os.environ['PLUGIN_ROOT'],'hooks','run-codex-hook.py'),run_name='__main__')\"",
+            "commandWindows": "py -3 -c \"import os,runpy;runpy.run_path(os.path.join(os.environ['PLUGIN_ROOT'],'hooks','run-codex-hook.py'),run_name='__main__')\"",
+            "timeout": 40
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "spawn_agent|collaborationspawn_agent|Agent|apply_patch|Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 -c \"import os,runpy;runpy.run_path(os.path.join(os.environ['PLUGIN_ROOT'],'hooks','run-codex-hook.py'),run_name='__main__')\"",
+            "commandWindows": "py -3 -c \"import os,runpy;runpy.run_path(os.path.join(os.environ['PLUGIN_ROOT'],'hooks','run-codex-hook.py'),run_name='__main__')\"",
+            "timeout": 40
+          }
+        ]
+      }
+    ]
+  }
+}

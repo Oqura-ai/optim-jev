@@ -1,4 +1,4 @@
-"""The model ladder: `.optim-jev/jev_router/models.json` (written by init), narrowed for this session.
+"""Host model ladders under `.optim-jev/jev_router/`, narrowed for this session.
 
 Until init has run, the built-in defaults stand. Init checks each model against the account
 and records the id that worked, or `available: false`, so routing never names a model that fails.
@@ -12,9 +12,12 @@ import os
 from dataclasses import asdict, dataclass, field
 from typing import Any
 
+from ...core.paths import data_root
 from .rules import router_dir, write_atomic
 
 MODELS_FILE = "models.json"
+CLAUDE_ALIASES = ("haiku", "sonnet", "opus")
+CODEX_ALIASES = ("fast", "balanced", "strong")
 
 DEFAULT_MODELS: tuple[dict[str, Any], ...] = (
     {"alias": "opus", "id": "claude-opus-5-5", "tier": 3, "cost": 5,
@@ -45,6 +48,7 @@ class Ladder:
     current_id: str
     capped: bool
     learned: dict[str, str] = field(default_factory=dict)
+    host: str = "claude"
 
     @property
     def aliases(self) -> tuple[str, ...]:
@@ -85,20 +89,44 @@ def _parse(raw: Any) -> tuple[ModelInfo, ...]:
     return tuple(sorted(models, key=lambda m: m.tier, reverse=True))
 
 
-def load_catalog(project_dir: str | os.PathLike[str] | None = None) -> tuple[ModelInfo, ...]:
+def catalog_filename(host: str = "claude") -> str:
+    normalized = host.strip().lower()
+    if normalized in ("", "claude"):
+        return MODELS_FILE
+    if not normalized.replace("-", "").replace("_", "").isalnum():
+        raise ValueError(f"invalid host name: {host!r}")
+    return f"models.{normalized}.json"
+
+
+def load_catalog(
+    project_dir: str | os.PathLike[str] | None = None,
+    *,
+    host: str = "claude",
+) -> tuple[ModelInfo, ...]:
+    normalized_host = host.strip().lower()
     if project_dir is not None:
         try:
-            models = _parse(json.loads((router_dir(project_dir) / MODELS_FILE).read_text(encoding="utf-8")))
+            models = _parse(
+                json.loads(
+                    (router_dir(project_dir) / catalog_filename(normalized_host)).read_text(encoding="utf-8-sig")
+                )
+            )
             if models:
                 return models
         except (OSError, ValueError):
             pass
-    return _parse(list(DEFAULT_MODELS))
+    return _parse(list(DEFAULT_MODELS)) if normalized_host in ("", "claude") else ()
 
 
-def save_catalog(project_dir: str | os.PathLike[str], models: tuple[ModelInfo, ...]) -> None:
+def save_catalog(
+    project_dir: str | os.PathLike[str],
+    models: tuple[ModelInfo, ...],
+    *,
+    host: str = "claude",
+) -> None:
+    data_root(project_dir)
     write_atomic(
-        router_dir(project_dir) / MODELS_FILE,
+        router_dir(project_dir) / catalog_filename(host.strip().lower()),
         json.dumps([asdict(m) for m in models], indent=2, ensure_ascii=False) + "\n",
     )
 
@@ -119,8 +147,10 @@ def with_checks(catalog: tuple[ModelInfo, ...], checks: Any) -> tuple[ModelInfo,
     return tuple(out)
 
 
-def alias_of(model_id: str, catalog: tuple[ModelInfo, ...]) -> str | None:
+def alias_of(model_id: str, catalog: tuple[ModelInfo, ...], *, host: str = "claude") -> str | None:
     lowered = model_id.lower()
+    if host.strip().lower() == "codex":
+        return next((m.alias for m in catalog if m.id and m.id.lower() == lowered), None)
     return next((m.alias for m in catalog if m.alias in lowered), None)
 
 
@@ -130,10 +160,13 @@ def build_ladder(
     capped: bool = True,
     learned: dict[str, str] | None = None,
     project_dir: str | os.PathLike[str] | None = None,
+    *,
+    host: str = "claude",
 ) -> Ladder:
-    catalog = load_catalog(project_dir)
-    current = alias_of(session_model, catalog)
+    normalized_host = host.strip().lower() or "claude"
+    catalog = load_catalog(project_dir, host=normalized_host)
+    current = alias_of(session_model, catalog, host=normalized_host)
     models = tuple(
         m for m in catalog if m.alias == current or (m.available and m.alias not in exclude)
     )
-    return Ladder(models, current, session_model, capped, dict(learned or {}))
+    return Ladder(models, current, session_model, capped, dict(learned or {}), normalized_host)

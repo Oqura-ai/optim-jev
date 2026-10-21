@@ -132,14 +132,20 @@ EFFORT_INSTRUCTIONS = (
 )
 
 
-def efforts_for(model: str) -> tuple[str, ...]:
-    return (*EFFORTS, "xhigh") if model == "opus" else EFFORTS
+def _supports_xhigh(model: str, ladder: Ladder) -> bool:
+    if ladder.host != "codex":
+        return model == "opus"
+    return bool(ladder.models) and ladder.tier(model) == max(item.tier for item in ladder.models)
 
 
-def _clamp(effort: str | None, model: str) -> str | None:
+def efforts_for(model: str, ladder: Ladder) -> tuple[str, ...]:
+    return (*EFFORTS, "xhigh") if _supports_xhigh(model, ladder) else EFFORTS
+
+
+def _clamp(effort: str | None, model: str, ladder: Ladder) -> str | None:
     if effort is None:
         return None
-    return effort if effort in efforts_for(model) else "high"
+    return effort if effort in efforts_for(model, ladder) else "high"
 
 
 def _escalation(escalated: Mapping[str, Any] | None, planned: Sequence[FilePlan]) -> tuple[int, str | None]:
@@ -221,7 +227,7 @@ def pick(
         effort = kw.pop("effort", None)
         # After an escalation the model moves up one and the effort stays what it was.
         effort = kept_effort if kept_effort is not None else effort
-        return Pick(final, source, writable, blocked, allowed, boost, effort=_clamp(effort, final), **kw)
+        return Pick(final, source, writable, blocked, allowed, boost, effort=_clamp(effort, final, ladder), **kw)
 
     questions: JevQuestions = {}
     if len(options) > 1:
@@ -231,8 +237,7 @@ def pick(
             "criteria": {a: (ladder.info(a).good_at if ladder.info(a) else None) for a in options},
         }
     if kept_effort is None:
-        # xhigh is offered only when opus can be the answer.
-        efforts = (*EFFORTS, "xhigh") if "opus" in options else EFFORTS
+        efforts = (*EFFORTS, "xhigh") if any(_supports_xhigh(model, ladder) for model in options) else EFFORTS
         questions["effort"] = {
             "type": "choice",
             "instructions": EFFORT_INSTRUCTIONS,

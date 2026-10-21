@@ -4,7 +4,8 @@
 
 | Page | What's in it |
 |---|---|
-| [Getting started](getting-started.md) | install, API key, commands, options, troubleshooting |
+| [Getting started](getting-started.md) | Claude Code install, API key, commands, options, troubleshooting |
+| [Codex support](codex.md) | Codex install, router setup, configuration, and limitations |
 | [TinyCart demo](../demo/tinycart/DEMO.md) | a 6–8 minute walkthrough of all three tools on a toy project |
 | [Performance metrics](performance-metrics.md) | how the `stats` commands work out what each tool saved |
 
@@ -23,4 +24,4 @@
 | [Architecture](architecture.md) | the TypeScript ↔ Python bridge, hooks, source layout, data on disk, session logs |
 | [Contributing](contributing.md) | setup, tests, where changes go, conventions |
 
-All diagrams are in [`architecture.html`](../architecture.html), with PNG copies in [`assets/`](../assets/).
+Architecture diagrams are maintained in [`architecture.md`](architecture.md), with images in [`assets/`](../assets/).

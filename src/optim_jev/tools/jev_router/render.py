@@ -44,26 +44,29 @@ def ladder_lines(ladder: Ladder) -> list[str]:
     return lines
 
 
-def maintenance(ladder: Ladder) -> str:
+def maintenance(ladder: Ladder, host: str = "claude") -> str:
     """How to keep the two routing files current; static text, so the prompt cache keeps it."""
+    codex = host.strip().lower() == "codex"
+    rules_file = "rules.codex.json" if codex else "rules.json"
+    context_file = "RULES.codex.md" if codex else "RULES.md"
     return (
         "Routing preferences live in two files you may edit yourself (read one before changing it). When the "
         "person changes a preference, update the right one:\n"
-        '- .optim-jev/jev_router/rules.json: which models may write or delete where, as {"paths": {"src/": '
+        f'- .optim-jev/jev_router/{rules_file}: which models may write or delete where, as {{"paths": {{"src/": '
         '{"write": [models], "delete": [models], "why": "what this area is"}}}. '
         f"Models are {', '.join(ladder.ascending)}, weakest first. "
         '"min": "<model>" may stand in for "write": that model and every stronger one; "min": "none": no model. '
         "A path with no entry is open to every model.\n"
-        "- .optim-jev/jev_router/RULES.md: unconventional facts a path rule cannot express, as bullets under "
+        f"- .optim-jev/jev_router/{context_file}: unconventional facts a path rule cannot express, as bullets under "
         "`## General` (all tasks) or `## <path>` (tasks touching it).\n"
-        "Choose by one test: a preference that names a path is a rules.json entry; one about a kind of work, or a "
-        "fact about the codebase, is a RULES.md bullet. Never write it in both. Change these files only when the "
+        f"Choose by one test: a preference that names a path is a {rules_file} entry; one about a kind of work, or a "
+        f"fact about the codebase, is a {context_file} bullet. Never write it in both. Change these files only when the "
         "person asks, never to get past a refused write."
     )
 
 
-def section(ladder: Ladder) -> str:
-    return "\n".join(["## optim-jev model router", INSTRUCTION, "", maintenance(ladder), "", *ladder_lines(ladder)])
+def section(ladder: Ladder, host: str = "claude") -> str:
+    return "\n".join(["## optim-jev model router", INSTRUCTION, "", maintenance(ladder, host), "", *ladder_lines(ladder)])
 
 
 def rule_rows(rows: list[Rule], ladder: Ladder) -> list[str]:

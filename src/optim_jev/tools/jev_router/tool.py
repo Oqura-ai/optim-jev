@@ -37,13 +37,29 @@ def _config(request: dict[str, Any]) -> RouterConfig:
     return RouterConfig.from_mapping({k[len(OPTION_PREFIX):]: v for k, v in raw.items() if k.startswith(OPTION_PREFIX)})
 
 
+def _host(request: dict[str, Any]) -> str:
+    return str(request.get("host") or "claude").lower()
+
+
 def _context(request: dict[str, Any], with_learned: bool = False) -> tuple[RouterConfig, rules_mod.Rules, Ladder]:
     config = _config(request)
     project = request["project_dir"]
-    catalog_aliases = tuple(reversed([m.alias for m in load_catalog(project)]))
-    rules = rules_mod.load(project, catalog_aliases)
-    learned = journal.learned(journal.read(project, str(request.get("session_id") or ""))) if with_learned else {}
-    ladder = build_ladder(str(request.get("session_model") or ""), rules.exclude, config.is_capped, learned, project)
+    host = _host(request)
+    catalog_aliases = tuple(reversed([m.alias for m in load_catalog(project, host=host)]))
+    rules = rules_mod.load(project, catalog_aliases, host=host)
+    learned = (
+        journal.learned(journal.read(project, str(request.get("session_id") or ""), host=host))
+        if with_learned
+        else {}
+    )
+    ladder = build_ladder(
+        str(request.get("session_model") or ""),
+        rules.exclude,
+        config.is_capped,
+        learned,
+        project,
+        host=host,
+    )
     return config, rules, ladder
 
 
@@ -58,7 +74,7 @@ def _rules_table(rules: rules_mod.Rules) -> dict[str, Any]:
 def render_mode(request: dict[str, Any]) -> dict[str, Any]:
     _, rules, ladder = _context(request, with_learned=True)
     return {
-        "section": render.section(ladder),
+        "section": render.section(ladder, _host(request)),
         "rules": _rules_table(rules),
         "tiers": list(ladder.ascending),
         "current": ladder.current,
@@ -77,7 +93,7 @@ def spawn_mode(request: dict[str, Any]) -> dict[str, Any]:
     recent = [str(t) for t in request.get("recent_inputs") or () if isinstance(t, str)]
     decided = request.get("decided") if isinstance(request.get("decided"), dict) else None
     named = [f.path for f in mentioned_files(f"{description}\n{prompt}", rules, project)]
-    context = context_mod.relevant(context_mod.load(project), named)
+    context = context_mod.relevant(context_mod.load(project, host=_host(request)), named)
     jev = _jev(config)
     result = pick(
         description, prompt, rules, context, ladder, jev, project, escalated,
@@ -105,6 +121,7 @@ def spawn_mode(request: dict[str, Any]) -> dict[str, Any]:
             "trimmed": result.trimmed,
             "jev": jev.usage(),
         },
+        host=_host(request),
     )
     return {
         "model": result.model,
@@ -134,24 +151,34 @@ def scan_mode(request: dict[str, Any]) -> dict[str, Any]:
         ),
         "paths": len(entries),
         # Every catalog model, unavailable ones too, so a re-init checks them again.
-        "models": [{"alias": m.alias, "id": m.id} for m in load_catalog(request["project_dir"])],
+        "models": [
+            {"alias": m.alias, "id": m.id}
+            for m in load_catalog(request["project_dir"], host=_host(request))
+        ],
     }
 
 
 def init_save_mode(request: dict[str, Any]) -> dict[str, Any]:
     project = request["project_dir"]
-    catalog = with_checks(load_catalog(project), request.get("checks"))
-    save_catalog(project, catalog)
+    host = _host(request)
+    catalog = with_checks(load_catalog(project, host=host), request.get("checks"))
+    save_catalog(project, catalog, host=host)
     config, old, ladder = _context(request)
     depth = int(request.get("depth") or config.depth)
     entries = scan_mod.scan(project, depth)
     tiers = {m.alias: m.tier for m in catalog}
     rules, context = writer.parse_reply(str(request.get("reply") or ""), entries, ladder, tiers)
     rules = rules_mod.Rules(rules.paths, old.exclude)
-    path = rules_mod.save(project, rules)
-    context_path = path.with_name(context_mod.CONTEXT_FILE)
+    path = rules_mod.save(project, rules, host=host)
+    context_path = path.with_name(context_mod.context_filename(host))
     rules_mod.backup(context_path)
-    rules_mod.write_atomic(context_path, context_mod.markdown(context))
+    rules_mod.write_atomic(
+        context_path,
+        context_mod.markdown(
+            context,
+            setup_command="/jev-route init" if host == "claude" else "optim-jev codex setup",
+        ),
+    )
     facts = len(context.general) + sum(len(f) for f in context.paths.values())
     models = ", ".join(
         f"{m.alias} {'✓ ' + m.id if m.available and m.id else '✓ (id learned at runtime)' if m.available else '✗ unavailable'}"
@@ -176,27 +203,39 @@ def init_save_mode(request: dict[str, Any]) -> dict[str, Any]:
 
 def validate_mode(request: dict[str, Any]) -> dict[str, Any]:
     project = request["project_dir"]
-    known = tuple(reversed([m.alias for m in load_catalog(project)]))
-    return {"problems": rules_mod.validate(project, known)}
+    known = tuple(reversed([m.alias for m in load_catalog(project, host=_host(request))]))
+    return {"problems": rules_mod.validate(project, known, host=_host(request))}
 
 
 def outcome_mode(request: dict[str, Any]) -> dict[str, Any]:
     record = request.get("record")
     if isinstance(record, dict):
-        journal.append(request["project_dir"], str(request.get("session_id") or ""), {"kind": "outcome", **record})
+        journal.append(
+            request["project_dir"],
+            str(request.get("session_id") or ""),
+            {"kind": "outcome", **record},
+            host=_host(request),
+        )
     return {}
 
 
 def why_mode(request: dict[str, Any]) -> dict[str, Any]:
     session_id = str(request.get("session_id") or "")
-    return {"text": journal.why(journal.read(request["project_dir"], session_id), session_id)}
+    return {
+        "text": journal.why(
+            journal.read(request["project_dir"], session_id, host=_host(request)),
+            session_id,
+        )
+    }
 
 
 def stats_mode(request: dict[str, Any]) -> dict[str, Any]:
     project = request["project_dir"]
     session_id = str(request.get("session_id") or "")
-    records, claude = journal.read(project, session_id), pricing.claude_log(project, session_id)
-    return {"text": journal.stats(records, load_catalog(project), claude)}
+    host = _host(request)
+    records = journal.read(project, session_id, host=host)
+    claude = pricing.claude_log(project, session_id) if host == "claude" else []
+    return {"text": journal.stats(records, load_catalog(project, host=host), claude, host=host)}
 
 
 HANDLERS = {

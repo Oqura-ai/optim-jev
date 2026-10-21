@@ -4,3 +4,5 @@
 jev_router/*
 !jev_router/rules.json
 !jev_router/RULES.md
+!jev_router/rules.codex.json
+!jev_router/RULES.codex.md

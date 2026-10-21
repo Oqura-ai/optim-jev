@@ -16,12 +16,35 @@ MIN_SAMPLES = 10
 WHY_SPAWNS = 5
 
 
-def append(project_dir: str | os.PathLike[str], session_id: str, record: dict[str, Any]) -> None:
-    logs.append(logs.session_file(project_dir, TOOL, session_id), {"session_id": session_id, **record})
+def tool_name(host: str = "claude") -> str:
+    normalized = host.strip().lower()
+    return TOOL if normalized in ("", "claude") else f"{TOOL}_{normalized}"
 
 
-def read(project_dir: str | os.PathLike[str], session_id: str) -> list[dict[str, Any]]:
-    return logs.read(logs.session_file(project_dir, TOOL, session_id))
+def append(
+    project_dir: str | os.PathLike[str],
+    session_id: str,
+    record: dict[str, Any],
+    *,
+    host: str = "claude",
+) -> None:
+    logs.append(
+        logs.session_file(project_dir, tool_name(host), session_id),
+        {"session_id": session_id, **record},
+        locked=host.strip().lower() not in ("", "claude"),
+    )
+
+
+def read(
+    project_dir: str | os.PathLike[str],
+    session_id: str,
+    *,
+    host: str = "claude",
+) -> list[dict[str, Any]]:
+    return logs.read(
+        logs.session_file(project_dir, tool_name(host), session_id),
+        locked=host.strip().lower() not in ("", "claude"),
+    )
 
 
 def _spawns(records: Sequence[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -68,7 +91,11 @@ def why(records: Sequence[dict[str, Any]], session_id: str) -> str:
 
 
 def stats(
-    records: Sequence[dict[str, Any]], catalog: Sequence[ModelInfo], claude: Sequence[dict[str, Any]] = ()
+    records: Sequence[dict[str, Any]],
+    catalog: Sequence[ModelInfo],
+    claude: Sequence[dict[str, Any]] = (),
+    *,
+    host: str = "claude",
 ) -> str:
     spawns = _spawns(records)
     if not spawns:
@@ -82,7 +109,12 @@ def stats(
     activity += [
         ("Decided by Jev", str(sources.get("jev", 0))),
         ("Decided by rules", str(sources.get("rules", 0))),
-        ("Decided by Claude (over budget)", str(sources.get("claude", 0))),
+        (
+            "Decided by Claude (over budget)"
+            if host == "claude"
+            else "Deterministic fallback (over budget)",
+            str(sources.get("claude", 0)),
+        ),
         ("Fallback (Jev offline)", str(sources.get("fallback", 0))),
         ("Jev input trimmed", str(sum(1 for r in spawns if r.get("trimmed")))),
         ("Escalations", str(escalations)),

@@ -1,16 +1,33 @@
 # Contributing
 
-Read [Architecture](architecture.md) first: every change sits on one side of the TypeScript ↔ Python bridge, and knowing which side matters.
+Read [Architecture](architecture.md) first: decisions belong in shared Python; Claude TypeScript and
+Codex Python are thin, explicit host adapters.
 
 ## Setup
 
 ```bash
 git clone https://github.com/Oqura-ai/optim-jev.git
 cd optim-jev
-python --version            # 3.10+; no packages to install
+python --version            # 3.10+; runtime is standard-library-only
+python -m pip install -e .  # installs the optim-jev CLI for Codex development
 ```
 
 To try your changes in Claude Code, install the plugin from your clone (see [Getting started](getting-started.md#install)) and reload it after each change. A hooks file that fails to parse is reported on reload with its line number.
+
+For Codex, use the isolated marketplace workflow in [Codex support](codex.md#install-from-github). Keep real
+credentials out of automated smoke environments, and create temporary `CODEX_HOME` directories
+outside the checkout so plugin installation cannot recursively copy its own cache.
+
+To test an unreleased Codex build without an editable install:
+
+```powershell
+py -3 -m pip uninstall -y optim-jev
+py -3 -m pip install .
+optim-jev codex install --marketplace .
+```
+
+This matches the release layout: Python is installed normally and Codex caches only the three-file
+plugin. Run `optim-jev codex uninstall` before repeating the installation test.
 
 ## Tests
 
@@ -18,8 +35,12 @@ To try your changes in Claude Code, install the plugin from your clone (see [Get
 # Python (standard library unittest)
 PYTHONPATH=src python -m unittest discover -s tests -p "test_*.py"
 
-# TypeScript type check (TypeScript isn't a project dependency; any 5.x works)
+# TypeScript type check after Claude has generated .claude-plugin/types/
 npx -p typescript@5 tsc --noEmit -p .
+
+# Claude integration contracts
+claude plugin validate .
+claude plugin test .
 ```
 
 `tests/*.test.ts` use Claude Code's own `claude-code/testing` module and run inside Claude Code's plugin test runner.
@@ -33,7 +54,10 @@ Python tests never call the real Jev API: they pass a `FakeJev` with an `ask(sta
 | a decision (what to prune, which model, which skills) | Python | the tool's `policy.py` / `logic.py` / `pick.py` |
 | a new command or subcommand | both | `command.run` handler in the hook, new mode in the tool's `HANDLERS` |
 | reacting to a new Claude Code event | TypeScript | `register()` in `hooks/optim-jev.ts` |
+| reacting to a Codex event | Python | `hosts/codex.py` and `codex-plugin/hooks/codex-hooks.json` |
+| a deterministic Codex command | Python | `src/optim_jev/cli.py`; never put control actions in a skill prompt |
 | a new user option | both | `.claude-plugin/plugin.json` + the tool's `config.py` |
+| a Codex-local option | Codex adapter | `.optim-jev/config.json` / `OPTIM_JEV_*`; never rewrite `~/.codex/config.toml` |
 | something to log | Python | append a record with a new `kind` to the session log |
 | a cost comparison | Python | the tool's stats code + [`core/pricing.py`](../src/optim_jev/core/pricing.py) |
 
@@ -69,4 +93,4 @@ const { text } = await runTool<{ text: string }>($, options, ROUTER_MODULE, 'my_
 
 - One change per PR, with tests for any Python behaviour you change.
 - Run both test commands above before opening it.
-- If you change a workflow, update its page in `docs/` and, if the flow changed, the diagrams in [`architecture.html`](../architecture.html) and `assets/`.
+- If you change a workflow, update its page and diagrams in [`architecture.md`](architecture.md), plus any affected images in `assets/`.

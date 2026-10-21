@@ -15,13 +15,18 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from ...core.paths import data_root
+from ...core.paths import DATA_DIRNAME, data_root
 
 SCHEMA = 1
 RULES_FILE = "rules.json"
 MAX_WHY_CHARS = 80
 # Shared files stay committable even though `.optim-jev/` is otherwise ignored.
-GITIGNORE = "*\n!.gitignore\n!jev_router/\njev_router/*\n!jev_router/rules.json\n!jev_router/RULES.md\n"
+LEGACY_GITIGNORE = "*\n!.gitignore\n!jev_router/\njev_router/*\n!jev_router/rules.json\n!jev_router/RULES.md\n"
+GITIGNORE = (
+    "*\n!.gitignore\n!jev_router/\njev_router/*\n"
+    "!jev_router/rules.json\n!jev_router/RULES.md\n"
+    "!jev_router/rules.codex.json\n!jev_router/RULES.codex.md\n"
+)
 
 
 @dataclass(frozen=True)
@@ -39,7 +44,12 @@ class Rules:
 
 
 def router_dir(project_dir: str | os.PathLike[str]) -> Path:
-    return data_root(project_dir) / "jev_router"
+    return Path(project_dir) / DATA_DIRNAME / "jev_router"
+
+
+def rules_filename(host: str = "claude") -> str:
+    normalized = host.strip().lower()
+    return RULES_FILE if normalized in ("", "claude") else f"rules.{normalized}.json"
 
 
 def relative(path: str, project_dir: str | os.PathLike[str]) -> str:
@@ -119,9 +129,9 @@ def parse(data: Any, known: tuple[str, ...]) -> Rules:
     )
 
 
-def load(project_dir: str | os.PathLike[str], known: tuple[str, ...]) -> Rules:
+def load(project_dir: str | os.PathLike[str], known: tuple[str, ...], *, host: str = "claude") -> Rules:
     try:
-        text = (router_dir(project_dir) / RULES_FILE).read_text(encoding="utf-8")
+        text = (router_dir(project_dir) / rules_filename(host)).read_text(encoding="utf-8-sig")
         return parse(json.loads(text), known)
     except (OSError, ValueError):
         return Rules({})
@@ -156,22 +166,28 @@ def write_atomic(path: Path, text: str) -> None:
         raise
 
 
-def validate(project_dir: str | os.PathLike[str], known: tuple[str, ...]) -> list[str]:
+def validate(
+    project_dir: str | os.PathLike[str],
+    known: tuple[str, ...],
+    *,
+    host: str = "claude",
+) -> list[str]:
     """What is wrong with rules.json as written. `parse` drops bad parts silently, and a file that is not
     JSON reads as no rules at all, so a typo can open every path or lock one: this names each problem."""
     try:
-        text = (router_dir(project_dir) / RULES_FILE).read_text(encoding="utf-8")
+        filename = rules_filename(host)
+        text = (router_dir(project_dir) / filename).read_text(encoding="utf-8-sig")
     except FileNotFoundError:
         return []
     except OSError as err:
-        return [f"rules.json cannot be read: {err}"]
+        return [f"{filename} cannot be read: {err}"]
     try:
         data = json.loads(text)
     except ValueError as err:
-        return [f"rules.json is not valid JSON ({err}); until it is fixed every path is open to every model"]
+        return [f"{filename} is not valid JSON ({err}); until it is fixed every path is open to every model"]
     raw_paths = data.get("paths") if isinstance(data, dict) else None
     if not isinstance(raw_paths, dict):
-        return ['rules.json has no "paths" object; until it has, every path is open to every model']
+        return [f'{filename} has no "paths" object; until it has, every path is open to every model']
     models = ", ".join(known)
     problems: list[str] = []
     for path, entry in raw_paths.items():
@@ -194,13 +210,13 @@ def validate(project_dir: str | os.PathLike[str], known: tuple[str, ...]) -> lis
     return problems
 
 
-def save(project_dir: str | os.PathLike[str], rules: Rules) -> Path:
+def save(project_dir: str | os.PathLike[str], rules: Rules, *, host: str = "claude") -> Path:
     root = data_root(project_dir)
     ignore = root / ".gitignore"
-    # Only the ignore file this plugin wrote is widened; an edited one is left alone.
-    if ignore.read_text(encoding="utf-8").strip() == "*":
+    # Only ignore files this plugin wrote are widened; an edited one is left alone.
+    if ignore.read_text(encoding="utf-8") in ("*", "*\n", LEGACY_GITIGNORE):
         ignore.write_text(GITIGNORE, encoding="utf-8")
-    path = router_dir(project_dir) / RULES_FILE
+    path = router_dir(project_dir) / rules_filename(host)
     backup(path)
     write_atomic(path, json.dumps(to_json(rules), indent=2, ensure_ascii=False) + "\n")
     return path

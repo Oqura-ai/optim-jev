@@ -44,9 +44,14 @@ def parse(text: str) -> Context:
     return Context(tuple(general), {p: tuple(f) for p, f in paths.items() if f})
 
 
-def load(project_dir: str | os.PathLike[str]) -> Context:
+def context_filename(host: str = "claude") -> str:
+    normalized = host.strip().lower()
+    return CONTEXT_FILE if normalized in ("", "claude") else f"RULES.{normalized}.md"
+
+
+def load(project_dir: str | os.PathLike[str], *, host: str = "claude") -> Context:
     try:
-        return parse((router_dir(project_dir) / CONTEXT_FILE).read_text(encoding="utf-8"))
+        return parse((router_dir(project_dir) / context_filename(host)).read_text(encoding="utf-8"))
     except OSError:
         return Context()
 
@@ -65,11 +70,11 @@ def relevant(context: Context, rel_paths: list[str]) -> list[str]:
     return lines
 
 
-def markdown(context: Context) -> str:
+def markdown(context: Context, *, setup_command: str = "/jev-route init") -> str:
     lines = [
         "# Codebase context for model routing",
         "",
-        "Written by `/jev-route init`; edit freely. `## General` facts go with every plan;",
+        f"Written by `{setup_command}`; edit freely. `## General` facts go with every plan;",
         "a `## <path>` section is sent only when a planned file is under that path.",
         "",
         f"## {GENERAL}",

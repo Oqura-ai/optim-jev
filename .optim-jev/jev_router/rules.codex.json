@@ -1,0 +1,57 @@
+{
+  "schema": 1,
+  "paths": {
+    ".claude-plugin/": {
+      "write": [
+        "fast",
+        "balanced",
+        "strong"
+      ],
+      "why": "Claude plugin metadata; small but breaking if malformed"
+    },
+    ".env": {
+      "write": [],
+      "why": "local environment secrets; never edit"
+    },
+    "PERFORMANCE_METRICS.md": {
+      "write": [],
+      "why": "performance metrics documentation guide"
+    },
+    "README.md": {
+      "write": [],
+      "why": "project documentation"
+    },
+    "codex-plugin/": {
+      "write": [
+        "fast",
+        "balanced",
+        "strong"
+      ],
+      "why": "Codex manifest and hook launcher; small but breaking if malformed"
+    },
+    "hooks/": {
+      "write": [
+        "fast",
+        "balanced",
+        "strong"
+      ],
+      "why": "Claude hook adapter; keep its behavior and prompt text stable"
+    },
+    "src/": {
+      "write": [
+        "fast",
+        "balanced",
+        "strong"
+      ],
+      "why": "shared Python engines and host adapters"
+    },
+    "tests/": {
+      "write": [
+        "fast",
+        "balanced",
+        "strong"
+      ],
+      "why": "Python and Claude integration tests"
+    }
+  }
+}

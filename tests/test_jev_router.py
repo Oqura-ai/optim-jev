@@ -10,7 +10,7 @@ from pathlib import Path
 from unittest import mock
 
 from optim_jev.tools.jev_router import context as context_mod, journal, policy, rules as rules_mod, scan, tool, writer
-from optim_jev.tools.jev_router.catalog import build_ladder
+from optim_jev.tools.jev_router.catalog import ModelInfo, build_ladder, load_catalog, save_catalog
 
 
 class FakeJev:
@@ -32,6 +32,9 @@ class FakeJev:
         return {"answers": {
             name: {"probabilities": self.effort if name == "effort" else self.probabilities} for name in questions
         }}
+
+    def usage(self):
+        return {"requests": self.calls, "input_tokens": 0, "output_tokens": 0, "cost_usd": 0.0}
 
 
 def project() -> Path:
@@ -98,6 +101,36 @@ class ScanAndInit(unittest.TestCase):
     def test_unparseable_reply_raises(self):
         with self.assertRaises(ValueError):
             writer.parse_reply("no json here", [], build_ladder("claude-opus-5-5"), {})
+
+
+class Catalog(unittest.TestCase):
+    def test_host_catalogs_are_separate_and_claude_keeps_its_legacy_filename(self):
+        root = project()
+        codex = (
+            ModelInfo("strong", 3, 5, "hard work", "gpt-codex-large"),
+            ModelInfo("fast", 1, 1, "small work", "gpt-codex-small"),
+        )
+        save_catalog(root, codex, host="codex")
+        self.assertEqual(load_catalog(root, host="codex"), codex)
+        self.assertEqual(build_ladder("gpt-codex-large", project_dir=root, host="codex").current, "strong")
+        self.assertTrue((root / ".optim-jev/jev_router/models.codex.json").is_file())
+        self.assertFalse((root / ".optim-jev/jev_router/models.json").exists())
+        self.assertEqual(load_catalog(root)[0].alias, "opus")
+
+    def test_unknown_host_has_no_optimistic_model_defaults(self):
+        self.assertEqual(load_catalog(project(), host="codex"), ())
+
+    def test_claude_keeps_legacy_alias_substring_resolution(self):
+        root = project()
+        save_catalog(
+            root,
+            (
+                ModelInfo("opus", 3, 5, "hard", "custom-opus"),
+                ModelInfo("sonnet", 2, 3, "normal", "custom-sonnet"),
+                ModelInfo("haiku", 1, 1, "small", "claude-sonnet-custom"),
+            ),
+        )
+        self.assertEqual(build_ladder("claude-sonnet-custom", project_dir=root).current, "sonnet")
 
 
 class Writer(unittest.TestCase):
@@ -181,6 +214,8 @@ class Rules(unittest.TestCase):
         self.assertIn(".optim-jev/jev_router/rules.json", section)
         self.assertIn("Never write it in both", section)
         self.assertIn("haiku, sonnet, opus", section)
+        self.assertIn('{"paths": {"src/": {"write": [models]', section)
+        self.assertNotIn("rules.codex.json", section)
 
     def test_nearest_ancestor_wins(self):
         rules = rules_mod.parse({"paths": {"src/": {"write": ["opus"]}, "src/a/": {"write": ["haiku"]}}}, ("haiku", "sonnet", "opus"))
@@ -193,6 +228,20 @@ class Rules(unittest.TestCase):
         lines = context_mod.relevant(ctx, ["src/core/db/models.py"])
         self.assertEqual(lines, ["- g1", "src/core/:", "- c1"])
         self.assertEqual(context_mod.parse(context_mod.markdown(ctx)), ctx)
+
+    def test_codex_policy_files_are_separate_from_claude(self):
+        root = project()
+        claude = rules_mod.Rules({"src/": rules_mod.Rule("src/", ("opus",), ("opus",))})
+        codex = rules_mod.Rules({"docs/": rules_mod.Rule("docs/", ("fast",), ("fast",))})
+        rules_mod.save(root, claude)
+        rules_mod.save(root, codex, host="codex")
+        self.assertEqual(rules_mod.load(root, self.known).paths["src/"].write, ("opus",))
+        self.assertEqual(
+            rules_mod.load(root, ("fast", "balanced", "strong"), host="codex").paths["docs/"].write,
+            ("fast",),
+        )
+        self.assertTrue((root / ".optim-jev/jev_router/rules.json").is_file())
+        self.assertTrue((root / ".optim-jev/jev_router/rules.codex.json").is_file())
 
 
 class Spawn(unittest.TestCase):
@@ -265,6 +314,50 @@ class Spawn(unittest.TestCase):
         self.pick("Fix README.md", no_opus, ladder=build_ladder("claude-sonnet-5-5"))
         self.assertNotIn("xhigh", no_opus.questions["effort"]["criteria"])
 
+    def test_xhigh_follows_the_host_strongest_tier_not_the_opus_name(self):
+        ladder = build_ladder("gpt-strong", project_dir=self.root, host="codex")
+        self.assertFalse(ladder.models)  # no optimistic Codex defaults
+        catalog = (
+            ModelInfo("strong", 3, 5, "hard work", "gpt-strong"),
+            ModelInfo("balanced", 2, 3, "normal work", "gpt-balanced"),
+            ModelInfo("fast", 1, 1, "small work", "gpt-fast"),
+        )
+        save_catalog(self.root, catalog, host="codex")
+        ladder = build_ladder("gpt-strong", project_dir=self.root, host="codex")
+        jev = FakeJev({"strong": 1.0}, effort={"xhigh": 1.0})
+        result = policy.pick(
+            "task",
+            "Fix README.md",
+            rules_mod.Rules({}),
+            [],
+            ladder,
+            jev,
+            str(self.root),
+        )
+        self.assertEqual((result.model, result.effort), ("strong", "xhigh"))
+
+    def test_xhigh_is_not_offered_to_sonnet_when_opus_is_unavailable(self):
+        save_catalog(
+            self.root,
+            (
+                ModelInfo("opus", 3, 5, "hard", "claude-opus", available=False),
+                ModelInfo("sonnet", 2, 3, "normal", "claude-sonnet"),
+                ModelInfo("haiku", 1, 1, "small", "claude-haiku"),
+            ),
+        )
+        ladder = build_ladder("claude-sonnet", project_dir=self.root)
+        jev = FakeJev({"sonnet": 1.0})
+        policy.pick(
+            "task",
+            "Fix README.md",
+            rules_mod.Rules({}),
+            [],
+            ladder,
+            jev,
+            str(self.root),
+        )
+        self.assertNotIn("xhigh", jev.questions["effort"]["criteria"])
+
     def test_bad_effort_answer_keeps_the_model(self):
         jev = FakeJev({"opus": 0.2, "sonnet": 0.8}, effort={})
         result = self.pick("Fix README.md", jev)
@@ -291,7 +384,10 @@ class Spawn(unittest.TestCase):
         self.assertEqual((bogus.model, bogus.effort), ("opus", None))  # session model, default effort
 
     def test_spawn_mode_logs_and_returns_the_appendix(self):
-        answer = tool.spawn_mode({**self.req, "session_id": "s", "description": "core index", "prompt": "Index src/core/db.py"})
+        with mock.patch.object(tool, "_jev", return_value=FakeJev()):
+            answer = tool.spawn_mode(
+                {**self.req, "session_id": "s", "description": "core index", "prompt": "Index src/core/db.py"}
+            )
         self.assertEqual(answer["model"], "opus")
         self.assertEqual((answer["source"], answer["escalated"]), ("rules", 0))
         self.assertIn("prices are integer cents", answer["appendix"])

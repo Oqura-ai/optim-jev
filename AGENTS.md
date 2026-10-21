@@ -26,4 +26,4 @@ Use `unittest` and inject a `FakeJev`; tests must never contact the real API. Ad
 
 ## Commit & Pull Request Guidelines
 
-History is small, but uses concise subjects and conventional prefixes such as `fix:`. Write imperative, scoped messages (for example, `fix: preserve router rules on init`). Keep each PR to one logical change, explain user-visible behavior, link relevant issues, and include tests. Update the corresponding `docs/` page for workflow changes; refresh `architecture.html` and affected assets when diagrams or flows change. Never commit API keys or local `.env` contents.
+History is small, but uses concise subjects and conventional prefixes such as `fix:`. Write imperative, scoped messages (for example, `fix: preserve router rules on init`). Keep each PR to one logical change, explain user-visible behavior, link relevant issues, and include tests. Update the corresponding `docs/` page for workflow changes; refresh `docs/architecture.md` and affected assets when diagrams or flows change. Never commit API keys or local `.env` contents.
