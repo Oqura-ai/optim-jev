@@ -8,10 +8,6 @@ Jev-powered optimization for Claude Code, plus model routing for OpenAI Codex.
 
 [![Claude Code plugin](https://img.shields.io/badge/Claude_Code-plugin-D97757?style=flat-square)](https://code.claude.com/docs/en/overview)
 [![Codex plugin](https://img.shields.io/badge/OpenAI_Codex-plugin-111827?style=flat-square)](https://developers.openai.com/codex/plugins)
-[![Python 3.10+](https://img.shields.io/badge/Python-3.10%2B-3776AB?style=flat-square&logo=python&logoColor=white)](https://www.python.org/downloads/)
-[![GitHub stars](https://img.shields.io/github/stars/Oqura-ai/optim-jev?style=flat-square&logo=github&label=Stars)](https://github.com/Oqura-ai/optim-jev/stargazers)
-[![GitHub forks](https://img.shields.io/github/forks/Oqura-ai/optim-jev?style=flat-square&logo=github&label=Forks)](https://github.com/Oqura-ai/optim-jev/forks)
-[![GitHub issues](https://img.shields.io/github/issues/Oqura-ai/optim-jev?style=flat-square&logo=github)](https://github.com/Oqura-ai/optim-jev/issues)
 [![License: MIT](https://img.shields.io/badge/License-MIT-22C55E?style=flat-square)](#license)
 [![Our Discord](https://img.shields.io/badge/Discord-Join%20Community-5865F2?style=flat-square&logo=discord&logoColor=white)](https://discord.gg/EpUxGjNBva)
 
