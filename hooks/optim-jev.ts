@@ -502,7 +502,7 @@ async function runCommand($: Engine, e: CommandRunInput): Promise<CommandRunResu
       return {
         text:
           verb === 'on'
-            ? 'jev-router: on for this session. File changes go through subagents; Jev picks each one\'s model.'
+            ? 'jev-router: on for this session. Claude delegates when it helps; Jev picks each subagent\'s model.'
             : 'jev-router: off for this session.',
       };
     }
@@ -595,7 +595,7 @@ function composeSections(sections: readonly PromptComposeSection[]): readonly Pr
   return [...sections.filter((s) => s.id !== SECTION_ID), { id: SECTION_ID, text: section, scope: 'session' }];
 }
 
-/** The main loop may not change files; a routed subagent only those its model is allowed. */
+/** The main loop and each routed subagent change only the files their model is allowed. */
 async function guardWrite(
   $: Engine,
   e: Record<string, unknown> & { agentId?: string },
@@ -604,36 +604,31 @@ async function guardWrite(
   const { paths, kind } = writeTargets(e);
   if (paths.length === 0) return { watched: false };
   const root = await $.session.root();
-  if (e.agentId === undefined) {
-    // The two routing files are the one thing the main loop may change: that is how preferences evolve.
-    if (kind === 'write' && paths.every((p) => isRulesFile(relPath(p, root)))) return { watched: false };
-    turn.deniedCount += 1;
-    return {
-      watched: false,
-      deny:
-        'jev-router: you cannot change files yourself while routing is on. Spawn a subagent with the Agent ' +
-        'tool: the goal, the exact file paths, and what done looks like. Jev picks its model.',
-    };
-  }
-  const running = agentModels.get(e.agentId);
-  if (!running) return { watched: false };
+  const main = e.agentId === undefined;
+  // The main loop may always change the two routing files: that is how preferences evolve.
+  if (main && kind === 'write' && paths.every((p) => isRulesFile(relPath(p, root)))) return { watched: false };
+  // A main loop on a model outside the ladder is held only to paths no model may change.
+  const running = main ? sessionAlias : agentModels.get(e.agentId ?? '');
+  if (!main && !running) return { watched: false };
   for (const target of paths) {
     const rel = relPath(target, root);
     const permission = lookup(rules, rel, tiers);
     const allowed = kind === 'write' ? permission.write : permission.delete;
-    if (allowed.includes(running)) continue;
+    if (allowed.length > 0 && (!running || allowed.includes(running))) continue;
     turn.deniedCount += 1;
     const why =
       allowed.length === 0
         ? `no model may ${kind} ${rel}`
         : `${running} may not ${kind} ${rel}; it needs ${allowed.join(' or ')}`;
+    const advice = !main
+      ? 'Leave it and say so in your final report.'
+      : allowed.length > 0
+        ? 'Hand this change to a subagent with the Agent tool; Jev runs it on a model the rule allows.'
+        : 'Leave it and tell the person.';
     notify($, `🔒 jev: ${why}`, 8_000);
-    return {
-      watched: false,
-      deny: `jev-router: ${why} (.optim-jev/jev_router/rules.json). Leave it and say so in your final report.`,
-    };
+    return { watched: false, deny: `jev-router: ${why} (.optim-jev/jev_router/rules.json). ${advice}` };
   }
-  return { watched: true };
+  return { watched: !main };
 }
 
 async function editedRulesFile($: Engine, e: Record<string, unknown>): Promise<boolean> {
@@ -703,6 +698,7 @@ async function routeSpawn(
       ...(await routerFields($)),
       description: e.description,
       prompt: e.prompt,
+      subagent_type: e.subagentType,
       escalated: Object.fromEntries(escalated),
       recent_inputs: recentInputs,
     };

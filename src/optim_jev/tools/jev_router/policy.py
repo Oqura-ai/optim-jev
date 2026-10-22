@@ -288,6 +288,57 @@ def pick(
     )
 
 
+EXPLORE_INSTRUCTIONS = (
+    "A read-only subagent will search and read the codebase to answer this prompt; it changes nothing. "
+    "Pick the least capable model whose findings will still be right. Finding files, definitions or usages "
+    "needs little; tracing behaviour across modules or explaining architecture needs more. Weigh any "
+    "thoroughness the prompt asks for. A stronger model than needed wastes money."
+)
+EXPLORE_CRITERIA = {
+    "haiku": "find files, definitions and usages; quick, targeted lookups",
+    "sonnet": "follow a feature across several modules; medium-depth analysis",
+    "opus": "architecture, subtle cross-cutting behaviour, very thorough investigation",
+}
+
+
+def pick_explore(
+    description: str,
+    prompt: str,
+    ladder: Ladder,
+    asker: JevAsker,
+    recent: Sequence[str] = (),
+    budget: int = 4000,
+) -> Pick:
+    """A read-only Explore subagent's model. Path rules and escalation are about writes, so neither applies;
+    any failure picks the cheapest model, as a weak search costs little and Claude can search again."""
+    options = ladder.within_cap(ladder.aliases)
+    if len(options) == 1:
+        return Pick(options[0], "rules", (), (), options)
+    cheapest = min(options, key=ladder.tier)
+    questions: JevQuestions = {
+        "model": {
+            "type": "choice",
+            "instructions": EXPLORE_INSTRUCTIONS,
+            "criteria": {a: EXPLORE_CRITERIA.get(a) or (ladder.info(a).good_at if ladder.info(a) else None) for a in options},
+        }
+    }
+    fields = [
+        Field("subagent_task", description),
+        Field("models", [{"model": a, "relative_cost": ladder.info(a).cost} for a in options if ladder.info(a)]),
+        Field("subagent_prompt", prompt[:MAX_PROMPT_CHARS], "middle"),
+        Field("recent_user_inputs", [middle(t, RECENT_INPUT_CHARS) for t in recent if t.strip()], "drop_first"),
+    ]
+    try:
+        fitted = fit(fields, budget, overhead=tokens_of(questions))
+        probs = choice_probabilities(asker.ask(fitted.state, questions)["answers"], "model", options)
+    except (OverBudget, JevCompactionError) as err:
+        return Pick(cheapest, "fallback", (), (), options, jev_failed=str(err))
+    return Pick(
+        next(iter(probs)), "jev", (), (), options, probabilities=probs,
+        input_tokens_est=fitted.tokens, trimmed=fitted.trimmed,
+    )
+
+
 def appendix(result: Pick, context: list[str], ladder: Ladder) -> str:
     """Text added to the subagent's prompt: its model, the rules and context of its files."""
     rows = list({f.rule.path: f.rule for f in (*result.files, *result.blocked) if f.rule}.values())

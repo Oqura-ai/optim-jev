@@ -2,7 +2,7 @@
 
 ![jev-router](../assets/jev-router.png)
 
-With routing on, Claude makes every file change through a subagent, and each subagent runs on the right model for its task, within rules you control. The rules evolve: when your preferences change, Claude updates them.
+With routing on, Claude works as usual: it makes small edits itself and spawns subagents when a change is large or self-contained, or when you ask. Each subagent, Explore included, runs on the right model for its task, within rules you control. The rules evolve: when your preferences change, Claude updates them.
 
 ## Rules
 
@@ -10,7 +10,7 @@ Two files in `.optim-jev/jev_router/`, both meant to be committed:
 
 | File | Holds | Enforced? |
 |---|---|---|
-| `rules.json` | anything tied to a **path**: which models may write or delete there, and what the area is | yes, every write is checked |
+| `rules.json` | anything tied to a **path**: which models may write or delete there, and what the area is | yes, every write is checked, the main loop's too |
 | `RULES.md` | facts **no path rule can express**: kinds of work ("docs only by sonnet or cheaper"), hidden coupling, invariants | no, shown to Jev and the subagent as guidance |
 
 They never repeat each other.
@@ -53,10 +53,18 @@ If rules already exist, init refuses unless you pass `--force` (the old files ar
 
 The routing section of the system prompt tells Claude how to maintain both files. When you say "let haiku write the tests", Claude edits `rules.json` itself:
 
-- The main loop may write **only** these two files; every other write still goes through subagents.
+- The main loop may always write these two files.
 - After each edit the rules are reloaded, so enforcement matches immediately.
 - `rules.json` is re-validated: bad JSON, unknown model names or ignored entries produce a toast for you and a message back to Claude.
 - Claude is told never to change a rule just to get past a refused write.
+
+## The main loop's own edits
+
+Claude edits files directly, checked against `rules.json` for the session's model. A path no model may change is refused. A path that needs another model (say, `"min": "opus"` while the session runs sonnet) is refused with a note to hand the change to a subagent, which Jev then routes to a model the rule allows. The rules files themselves are always writable.
+
+## Explore subagents
+
+Claude Code runs its built-in Explore subagent on the main conversation's model. The router asks Jev instead, with read-only criteria: haiku for finding files and usages, sonnet for following a feature across modules, opus for architecture and very thorough analysis. Path rules and escalation are about writes, so neither applies; the cap still does. If Jev fails or its input is over the cap, Explore runs on the cheapest model.
 
 ## A routed subagent, step by step
 

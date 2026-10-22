@@ -9,7 +9,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from optim_jev.tools.jev_router import context as context_mod, journal, policy, rules as rules_mod, scan, tool, writer
+from optim_jev.tools.jev_router import context as context_mod, journal, policy, render, rules as rules_mod, scan, tool, writer
 from optim_jev.tools.jev_router.catalog import ModelInfo, build_ladder, load_catalog, save_catalog
 
 
@@ -217,6 +217,12 @@ class Rules(unittest.TestCase):
         self.assertIn('{"paths": {"src/": {"write": [models]', section)
         self.assertNotIn("rules.codex.json", section)
 
+    def test_claude_edits_freely_while_codex_still_delegates_every_change(self):
+        ladder = build_ladder("claude-opus-5-5")
+        self.assertIn("make small edits yourself", render.section(ladder, "claude"))
+        self.assertNotIn("You cannot edit", render.section(ladder, "claude"))
+        self.assertIn("You cannot edit", render.section(ladder, "codex"))
+
     def test_nearest_ancestor_wins(self):
         rules = rules_mod.parse({"paths": {"src/": {"write": ["opus"]}, "src/a/": {"write": ["haiku"]}}}, ("haiku", "sonnet", "opus"))
         self.assertEqual(rules_mod.resolve(rules, "src/a/b/c.py").write, ("haiku",))
@@ -393,6 +399,34 @@ class Spawn(unittest.TestCase):
         self.assertIn("prices are integer cents", answer["appendix"])
         self.assertIn("core index → opus", journal.why(journal.read(self.root, "s"), "s"))
         self.assertTrue((Path(self.root) / ".optim-jev" / "logs" / "jev_router" / "s.jsonl").is_file())
+
+    def test_explore_ignores_write_rules_and_asks_jev_only_for_the_model(self):
+        jev = FakeJev({"haiku": 0.7, "sonnet": 0.2, "opus": 0.1})
+        result = policy.pick_explore("find db", "Where is src/core/db.py used?", self.ladder, jev)
+        self.assertEqual((result.model, result.source, result.effort), ("haiku", "jev", None))
+        self.assertEqual(list(jev.questions), ["model"])
+        self.assertIn("read-only", jev.questions["model"]["instructions"])
+
+    def test_explore_respects_the_cap(self):
+        jev = FakeJev({"opus": 0.9, "sonnet": 0.1})
+        result = policy.pick_explore("map", "Explain the architecture", build_ladder("claude-sonnet-5-5"), jev)
+        self.assertEqual(sorted(jev.questions["model"]["criteria"]), ["haiku", "sonnet"])
+        self.assertEqual(result.model, "sonnet")
+
+    def test_explore_falls_back_to_the_cheapest_model(self):
+        self.assertEqual(policy.pick_explore("map", "Explain", self.ladder, FakeJev(fail=True)).model, "haiku")
+        over = policy.pick_explore("map", "Explain", self.ladder, FakeJev(), budget=10)
+        self.assertEqual((over.model, over.source), ("haiku", "fallback"))
+
+    def test_spawn_mode_routes_explore_without_rules_or_appendix(self):
+        with mock.patch.object(tool, "_jev", return_value=FakeJev({"sonnet": 1.0})):
+            answer = tool.spawn_mode(
+                {**self.req, "session_id": "s", "description": "trace", "prompt": "Trace src/core/db.py",
+                 "subagent_type": "Explore", "escalated": {"src/core/db.py": 1}}
+            )
+        self.assertEqual((answer["model"], answer["source"], answer["escalated"]), ("sonnet", "jev", 0))
+        self.assertEqual((answer["appendix"], answer["files"]), ("", []))
+        self.assertEqual(journal.read(self.root, "s")[-1]["subagent_type"], "Explore")
 
     def test_a_file_url_in_the_prompt_names_its_file(self):
         url = (self.root / "src/api/auth.py").as_uri()
