@@ -3,7 +3,7 @@
     python -m optim_jev.tools.jev_router.tool <mode>
 
 render     {session_model}                       -> {section, rules, tiers, current, has_rules}
-spawn      {session_id, session_model, description, prompt, escalated}
+spawn      {session_id, session_model, description, prompt, escalated, subagent_type}
            -> {model, files, appendix, toast, source, escalated, jev_failed}
 scan       {session_model, directive, depth, force} -> {system, prompt, paths, models} | {refused}
 validate   {}                                    -> {problems}
@@ -26,7 +26,7 @@ from ..jev_compacter.jev import JevClient
 from . import context as context_mod, journal, render, rules as rules_mod, scan as scan_mod, writer
 from .catalog import Ladder, build_ladder, load_catalog, save_catalog, with_checks
 from .config import RouterConfig
-from .policy import appendix, files_json, mentioned_files, pick, toast
+from .policy import appendix, files_json, mentioned_files, pick, pick_explore, toast
 
 OPTION_PREFIX = "jev_router_"
 
@@ -92,13 +92,18 @@ def spawn_mode(request: dict[str, Any]) -> dict[str, Any]:
     escalated = request.get("escalated") if isinstance(request.get("escalated"), dict) else {}
     recent = [str(t) for t in request.get("recent_inputs") or () if isinstance(t, str)]
     decided = request.get("decided") if isinstance(request.get("decided"), dict) else None
-    named = [f.path for f in mentioned_files(f"{description}\n{prompt}", rules, project)]
-    context = context_mod.relevant(context_mod.load(project, host=_host(request)), named)
+    subagent_type = str(request.get("subagent_type") or "")
     jev = _jev(config)
-    result = pick(
-        description, prompt, rules, context, ladder, jev, project, escalated,
-        recent=recent, budget=config.max_input_tokens, decided=decided,
-    )
+    if subagent_type.lower() == "explore":
+        context: list[str] = []
+        result = pick_explore(description, prompt, ladder, jev, recent=recent, budget=config.max_input_tokens)
+    else:
+        named = [f.path for f in mentioned_files(f"{description}\n{prompt}", rules, project)]
+        context = context_mod.relevant(context_mod.load(project, host=_host(request)), named)
+        result = pick(
+            description, prompt, rules, context, ladder, jev, project, escalated,
+            recent=recent, budget=config.max_input_tokens, decided=decided,
+        )
     if result.ask_claude is not None:
         return {"ask_claude": result.ask_claude, "reason": result.jev_failed}
     journal.append(
@@ -108,6 +113,7 @@ def spawn_mode(request: dict[str, Any]) -> dict[str, Any]:
             "kind": "spawn",
             "current": ladder.current,
             "description": description[:120],
+            "subagent_type": subagent_type or None,
             "model": result.model,
             "effort": result.effort,
             "source": result.source,

@@ -110,7 +110,7 @@
     "jev_router_mode": {
       "type": "string",
       "title": "Router: default mode",
-      "description": "on: the main model changes files only through subagents, and Jev picks each subagent's model. /jev-route on|off changes it per session.",
+      "description": "on: Claude spawns subagents when it helps or when asked, and Jev picks each subagent's model, Explore included; rules.json binds every edit. /jev-route on|off changes it per session.",
       "options": ["off", "on"],
       "default": "off"
     },

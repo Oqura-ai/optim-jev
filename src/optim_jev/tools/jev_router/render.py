@@ -10,6 +10,15 @@ from .catalog import Ladder
 from .rules import Rule
 
 INSTRUCTION = (
+    "Work as you normally would: make small edits yourself, and use the Agent tool when a change is large, "
+    "self-contained or parallel, or when the person asks for a subagent. Some paths are reserved for certain "
+    "models; when one of your edits there is refused, hand that change to a subagent. Jev, a model router, "
+    "reads each subagent's prompt and runs it on the cheapest model that will do it correctly, so write "
+    "prompts that stand alone: the goal, the exact file paths to change, and what done looks like. Give "
+    "unrelated changes their own subagents so simple ones go to cheaper models."
+)
+# Codex's root agent may not write at all (hosts/codex.py refuses it), so it keeps the delegation rule.
+CODEX_INSTRUCTION = (
     "You cannot edit, write or delete files yourself; those calls are refused (the two routing files "
     "described below are the exception). Make every file change "
     "through the Agent tool. Jev, a model router, reads each subagent's prompt and runs it on the "
@@ -66,7 +75,8 @@ def maintenance(ladder: Ladder, host: str = "claude") -> str:
 
 
 def section(ladder: Ladder, host: str = "claude") -> str:
-    return "\n".join(["## optim-jev model router", INSTRUCTION, "", maintenance(ladder, host), "", *ladder_lines(ladder)])
+    instruction = CODEX_INSTRUCTION if host.strip().lower() == "codex" else INSTRUCTION
+    return "\n".join(["## optim-jev model router", instruction, "", maintenance(ladder, host), "", *ladder_lines(ladder)])
 
 
 def rule_rows(rows: list[Rule], ladder: Ladder) -> list[str]:
