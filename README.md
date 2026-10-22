@@ -30,7 +30,7 @@ Each tool works independently and fails open if unavailable. Measured cost repor
 | Tool | What it does | Available in | Claude default | Learn more |
 |---|---|---|:---:|---|
 | **jev-compacter** | Removes stale tool calls and outputs instead of summarizing away the whole conversation | Claude Code | On | [Guide](docs/jev-compacter.md) |
-| **jev-router** | Routes file changes to the right model using project-specific rules that evolve with your workflow | Claude Code and Codex | Off | [Guide](docs/jev-router.md) |
+| **jev-router** | Runs each subagent, Explore searches included, on the cheapest model that fits, within project rules that evolve with your workflow | Claude Code and Codex | Off | [Guide](docs/jev-router.md) |
 | **jev-skills** | Sends a short, relevant skill list for each prompt instead of the entire catalog | Claude Code; experimental advisory mode in Codex | Off | [Guide](docs/jev-skills.md) |
 
 <details>
@@ -48,10 +48,14 @@ It works automatically with `/compact` and auto-compaction. Inspect the current 
 </details>
 
 <details>
-<summary><strong>jev-router — use the right model for each edit</strong></summary>
+<summary><strong>jev-router — the right model for every subagent</strong></summary>
 
 <br>
 <img src="assets/jev-router.png" alt="jev-router model routing decisions" width="100%">
+
+Your main conversation keeps its model, so its prompt cache stays warm. The routing happens where it pays off: every subagent Claude spawns gets its own model and effort from Jev, Explore searches included. A quick lookup runs on haiku; a deep architecture review gets a stronger model.
+
+Claude works as usual, editing directly and delegating when a task calls for it or when you ask. `rules.json` sets which models may edit each path; when a path needs a different model than your session's, Claude hands that change to a routed subagent.
 
 ```text
 /jev-route init "what matters in this project"
