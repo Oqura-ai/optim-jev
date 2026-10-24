@@ -230,11 +230,11 @@ def pick(
         return Pick(final, source, writable, blocked, allowed, boost, effort=_clamp(effort, final, ladder), **kw)
 
     questions: JevQuestions = {}
-    if len(options) > 1:
+    if options[1:]:  # more than one option (`len(options) > 1` narrows options to tuple[()] for Pyright)
         questions["model"] = {
             "type": "choice",
             "instructions": MODEL_INSTRUCTIONS,
-            "criteria": {a: (ladder.info(a).good_at if ladder.info(a) else None) for a in options},
+            "criteria": {a: (info.good_at if (info := ladder.info(a)) else None) for a in options},
         }
     if kept_effort is None:
         efforts = (*EFFORTS, "xhigh") if any(_supports_xhigh(model, ladder) for model in options) else EFFORTS
@@ -247,7 +247,7 @@ def pick(
     if decided is not None and decided.get("failed"):
         return done(_fallback(options, ladder), "fallback", jev_failed=str(decided["failed"]))
     if decided is not None:
-        model = decided.get("model") if decided.get("model") in options else _fallback(options, ladder)
+        model = chosen if (chosen := decided.get("model")) in options else _fallback(options, ladder)
         effort = decided.get("effort") if decided.get("effort") in EFFORT_CRITERIA else None
         return done(model, "claude", effort=effort)
     if not questions:

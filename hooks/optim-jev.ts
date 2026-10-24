@@ -375,7 +375,7 @@ async function rememberCompactedContext(
   try {
     const fields = knownWindow > 0 ? null : await sessionFields($, options);
     const windowTokens = knownWindow > 0 ? knownWindow : (fields?.usage.window_tokens ?? 0);
-    if (typeof result.tokensAfter === 'number' && windowTokens > 0) {
+    if ('tokensAfter' in result && typeof result.tokensAfter === 'number' && windowTokens > 0) {
       rememberContext((100 * result.tokensAfter) / windowTokens);
     } else if (fields && (fields.percent > 0 || dashboardContextPercent === null)) {
       rememberContext(fields.percent);
@@ -1300,7 +1300,7 @@ export const register: Register = (on: On, options: PluginOptions) => {
         e.surface === 'terminal',
         dashboardStarFrameNumber,
         maxRows,
-      );
+      ) ?? next(e);
     } catch (error) {
       $.ui.log(`optim-jev: dashboard not rendered (${errorText(error)})`, { to: 'debug' });
       return next(e);

@@ -12,7 +12,7 @@ TriggerLevel = Literal["soft", "hard", "idle", "manual"]
 # untouched; summarize: hand over to Claude Code's built-in compaction.
 PolicyAction = Literal["skip", "apply", "defer", "summarize"]
 
-JevQuestions = dict[str, dict[str, str]]
+JevQuestions = dict[str, dict[str, Any]]
 
 
 class JevCompactionError(Exception):
