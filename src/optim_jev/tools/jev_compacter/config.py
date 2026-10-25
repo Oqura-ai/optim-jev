@@ -32,8 +32,6 @@ class CompactionConfig:
     regrow_percent: int = 10
     # Below the target, a pruning is still applied when it frees at least this much.
     min_freed_tokens: int = 8_000
-    # Prompt cache TTL: after this much idle time a rewrite costs no extra cache misses.
-    cache_idle_seconds: int = 300
 
     @classmethod
     def from_mapping(cls, values: Mapping[str, Any]) -> CompactionConfig:

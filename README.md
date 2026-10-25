@@ -45,6 +45,8 @@ It works automatically with `/compact` and auto-compaction. Inspect the current 
 /jev-compact stats
 ```
 
+Want it to prune earlier or keep more? Pick a **Compaction: style** (`balanced`, `save-tokens`, or `keep-context`) in `/config` under optim-jev. See [Pick a style](docs/jev-compacter.md#pick-a-style).
+
 </details>
 
 <details>

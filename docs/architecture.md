@@ -58,8 +58,9 @@ python -m optim_jev.tools.jev_router.tool spawn
 | `session.start` | all | register commands, restore per-session modes, build the skill index |
 | `command.run` | all | `/jev-compact`, `/jev-route`, `/jev-skills` |
 | `session.compact` | compacter | replace the built-in summary with a Jev prune |
-| `turn.complete` | all | auto-compaction check, router outcome, usage log flush |
-| `turn.start` | router | reset per-turn counters |
+| `turn.complete` | all | auto-compaction check, cold-cache timer, router outcome, usage log flush |
+| `turn.start` | router, compacter | reset per-turn counters; cancel the cold-cache timer |
+| `classic.SessionStart`, `classic.PostModelSwitch` | compacter | a resume past the cache lifetime or a model switch: offer a Jev prune |
 | `turn.step` | router | apply each routed subagent's effort to its requests |
 | `prompt.compose` | router | add the routing instructions to the system prompt |
 | `prompt.submit` | skills | attach the shortlist to the prompt |
@@ -70,7 +71,7 @@ python -m optim_jev.tools.jev_router.tool spawn
 | `skill.prompt` | skills | log which skills were actually loaded |
 | `ui.render` (`AbovePrompt`) | all | render live state and controls without doing I/O |
 
-`session.start` and `turn.complete` are shared: one handler each, calling into every tool in turn.
+`session.start`, `turn.start` and `turn.complete` are shared: one handler each, calling into every tool in turn.
 
 ### Codex hooks
 
