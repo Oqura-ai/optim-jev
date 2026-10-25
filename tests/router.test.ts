@@ -130,18 +130,21 @@ async function stepEffort($: Engine, seen: ReturnType<typeof engine>, agentId: s
 const DONE = { turnId: 't1', answer: 'done', durationMs: 1, isAborted: false, reason: 'answer' } as const;
 
 describe('jev-router', () => {
-  test('on: the main loop delegates; Jev picks the subagent model; rules bind the subagent', { options: { jev_router_mode: 'on' } }, async ($, on) => {
+  test('on: the main loop edits where its model may; Jev picks the subagent model; rules bind both', { options: { jev_router_mode: 'on' } }, async ($, on) => {
     const seen = engine(on);
     await $.session.start(START);
     await $.turn.start({ text: 'add oauth to the api', turnId: 't1' });
 
     const main = await $.tool.call(EDIT);
-    expect(main.deny).toContain('Spawn a subagent');
-    const rm = await $.tool.call({ tool: 'Bash', command: 'rm src/api/a.py' });
-    expect(rm.deny).toContain('Spawn a subagent');
+    expect(main.deny).toBeUndefined();
+    const reserved = await $.tool.call({ ...EDIT, file_path: '/proj/src/core/db.py' });
+    expect(reserved.deny).toContain('sonnet may not write src/core/db.py');
+    expect(reserved.deny).toContain('Agent tool');
+    const rm = await $.tool.call({ tool: 'Bash', command: 'rm src/gen/pb.py' });
+    expect(rm.deny).toContain('no model may delete src/gen/pb.py');
     const ls = await $.tool.call({ tool: 'Bash', command: 'ls src' });
     expect(ls.deny).toBeUndefined();
-    expect(seen.toolsRun).toEqual(['Bash']);
+    expect(seen.toolsRun).toEqual(['Edit', 'Bash']);
 
     const agent = await $.agent.spawn(spawn('Add oauth to src/api/a.py', 'oauth handler'));
     expect(seen.spawned.at(-1)?.model).toBe('haiku');
@@ -155,6 +158,14 @@ describe('jev-router', () => {
 
     await $.turn.complete(DONE);
     expect(seen.outcomes.at(-1)).toMatchObject({ spawned: 1, denials: 3 });
+  });
+
+  test('on: an Explore subagent is routed and Python is told its type', { options: { jev_router_mode: 'on' } }, async ($, on) => {
+    const seen = engine(on);
+    await $.session.start(START);
+    await $.agent.spawn({ ...spawn('Find where auth is handled', 'find auth'), subagentType: 'Explore' });
+    expect(seen.requests.at(-1)).toMatchObject({ subagent_type: 'Explore' });
+    expect(seen.spawned.at(-1)?.model).toBe('haiku');
   });
 
   test('on: forks keep their parent model and are not routed', { options: { jev_router_mode: 'on' } }, async ($, on) => {

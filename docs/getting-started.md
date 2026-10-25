@@ -69,7 +69,7 @@ Figures marked `(est.)` in `stats` are estimates. Unmarked figures are measured 
 /jev-route stats                     cost vs the main model doing the work
 ```
 
-With routing on, Claude changes files through subagents and Jev picks each subagent's model. To change a preference later, just tell Claude ("let haiku edit the tests"); it updates `.optim-jev/jev_router/rules.json` or `RULES.md` itself.
+With routing on, Claude works as usual and spawns subagents when it helps or when you ask; Jev picks each subagent's model, Explore subagents included. To change a preference later, just tell Claude ("let haiku edit the tests"); it updates `.optim-jev/jev_router/rules.json` or `RULES.md` itself.
 
 ### jev-skills: off by default
 
