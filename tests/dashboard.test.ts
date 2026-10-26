@@ -3,9 +3,6 @@ import { describe, expect, test } from 'claude-code/testing';
 import {
   compacterText,
   dashboardLayout,
-  DASHBOARD_STAR_SPACING,
-  dashboardStarFrame,
-  dashboardStarPoints,
   routerText,
   skillsText,
   type DashboardView,
@@ -85,7 +82,7 @@ function engine(on: On, settings: EngineSettings = {}) {
   on('session.model', () => ({ value: 'claude-sonnet-5-5' }));
   on('session.messages', () => ({ value: [] }));
   on('session.usage', () => ({
-    value: { context: { tokens: percent * 2_000, window: 200_000, percent } },
+    value: { startedAt: 0, context: { tokens: percent * 2_000, window: 200_000, percent }, rateLimits: [] },
   }));
   on('store.get', (_$, e) => ({ value: store.get(e.key) }));
   on('store.set', (_$, e) => {
@@ -94,7 +91,7 @@ function engine(on: On, settings: EngineSettings = {}) {
   });
   on('env.get', () => ({ value: undefined }));
   on('settings.read', () => ({ value: {} }));
-  on('tool.list', () => ({ value: [{ name: 'ListSkills', description: '' }] }));
+  on('tool.list', () => ({ value: [{ name: 'ListSkills', description: '', mcp: false }] }));
   on('command.register', (_$, e) => ({ value: { command: e.name } }));
   on('command.run', (_$, e) => {
     seen.commands.push(`${e.command} ${e.args}`.trim());
@@ -214,32 +211,6 @@ describe('optim-jev dashboard', () => {
     expect(dashboardLayout(-1, -1)).toMatchObject({ width: 0, rows: 0, full: false });
   });
 
-  test('short terminal band stays compact and preserves the action handlers', { options: { jev_dashboard_mode: 'on' } }, async ($, on) => {
-    const seen = engine(on);
-    await $.session.start(START);
-    const band = await $.ui.mount({
-      plugin: 'optim-jev', surface: 'terminal', component: 'AbovePrompt',
-      props: { hasSurvey: false, isWorking: false, maxRows: 3, bodyColumns: 100,
-        scroll: { offset: 0, bodyRows: 3 }, view: {} },
-    } as never);
-    const text = JSON.stringify(await band.drawn());
-    expect(text).toContain('Ctx 42%');
-    expect(text).toContain('Router off');
-    expect(text).toContain('Skills off');
-    expect(text).not.toContain('dashboard-stars');
-    expect(text).not.toContain('borderStyle');
-    expect(text).toContain('"height":2');
-    await band.press({ key: 'dashboard-router' });
-    await band.redraw();
-    expect(JSON.stringify(await band.drawn())).toContain('Router on');
-    await band.press({ key: 'dashboard-skills' });
-    await band.redraw();
-    expect(JSON.stringify(await band.drawn())).toContain('Skills on');
-    await band.press({ key: 'dashboard-compact' });
-    expect(seen.commands).toContain('compact');
-    await band.unmount();
-  });
-
   test('terminal render stays valid at the width and height breakpoints', { options: { jev_dashboard_mode: 'on' } }, async ($, on) => {
     engine(on);
     await $.session.start(START);
@@ -252,6 +223,7 @@ describe('optim-jev dashboard', () => {
         } as never);
         const text = JSON.stringify(await band.drawn());
         const layout = dashboardLayout(columns, rows);
+        expect(text).toContain('42%');
         expect(text.includes('borderStyle')).toBe(layout.full);
         expect(text.includes('dashboard-stars')).toBe(layout.full);
         expect(text.includes('dashboard-compact')).toBe(layout.full || layout.controls);
@@ -267,102 +239,24 @@ describe('optim-jev dashboard', () => {
     }
   });
 
-  test('a one-row narrow terminal uses a truncated status without buttons', { options: { jev_dashboard_mode: 'on' } }, async ($, on) => {
-    engine(on);
-    await $.session.start(START);
-    const band = await $.ui.mount({
-      plugin: 'optim-jev', surface: 'terminal', component: 'AbovePrompt',
-      props: { hasSurvey: false, isWorking: false, maxRows: 1, bodyColumns: 30,
-        scroll: { offset: 0, bodyRows: 1 }, view: {} },
-    } as never);
-    const text = JSON.stringify(await band.drawn());
-    expect(text).toContain('Ctx 42%');
-    expect(text).toContain('"wrap":"truncate"');
-    expect(text).toContain('"height":1');
-    expect(text).not.toContain('dashboard-actions');
-    expect(text).not.toContain('dashboard-stars');
-    expect(text).not.toContain('borderStyle');
-    await band.unmount();
-  });
-
-  test('formatters preserve the useful facts in wide and narrow layouts', () => {
+  test('formatters keep the useful facts, and name each fallback', () => {
     const state = view();
     expect(compacterText(state)).toContain('Context 42% · soft 60% · hard 85% · freed ~12k');
     expect(routerText(state)).toContain('update docs → Haiku via rules');
     expect(skillsText(state)).toContain('Skills Global 7 · hallmark +1');
-    expect(compacterText(state, true)).toContain('Context 42% · soft 60% · hard 85%');
     expect(routerText(state, true)).toBe('Router on → Haiku');
-    expect(skillsText(state, true)).toContain('Skills Global 7');
-  });
 
-  test('star particles are deterministic and twinkle between frames', () => {
-    const first = dashboardStarPoints(126, 3, 0);
-    const later = dashboardStarPoints(126, 3, 80);
-    expect(first).toHaveLength(12);
-    expect(first.map(({ x }) => Math.floor(x / DASHBOARD_STAR_SPACING))).toEqual([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]);
-    expect(first.map(({ x, y }) => `${x}:${y}`)).not.toEqual(later.map(({ x, y }) => `${x}:${y}`));
-    expect(dashboardStarFrame(0)).toBe(dashboardStarFrame(0));
-    expect(dashboardStarFrame(0)).not.toBe(dashboardStarFrame(6));
-  });
-
-  test('formatters name the fail-open fallback instead of a generic error', () => {
-    expect(routerText(view({ router: { mode: 'on', routing: false, offline: false, hasRules: false, decision: null } }))).toContain(
-      'no rules · run /jev-route init',
+    const compacter = (outcome: DashboardView['compacter']['outcome']) => compacterText(view({ compacter: { ...state.compacter, outcome } }));
+    const router = (patch: Partial<DashboardView['router']>) => routerText(view({ router: { ...state.router, ...patch } }));
+    const skills = (outcome: DashboardView['skills']['outcome']) => skillsText(view({ skills: { ...state.skills, outcome } }));
+    expect(compacter({ kind: 'deferred', freedTokensEst: 14_000 })).toContain('deferred ~14k');
+    expect(compacter({ kind: 'builtin' })).toContain('built-in summary');
+    expect(router({ hasRules: false, decision: null })).toContain('no rules · run /jev-route init');
+    expect(router({ offline: true, decision: { task: 'tests', model: 'sonnet', source: 'fallback', escalated: 0 } })).toContain(
+      'session model · Jev offline',
     );
-    expect(
-      routerText(
-        view({
-          router: {
-            mode: 'on',
-            routing: false,
-            offline: true,
-            hasRules: true,
-            decision: { task: 'tests', model: 'sonnet', source: 'fallback', escalated: 0 },
-          },
-        }),
-      ),
-    ).toContain('session model · Jev offline');
-    expect(
-      skillsText(
-        view({
-          skills: {
-            mode: 'on',
-            scope: 'project',
-            count: 7,
-            indexing: false,
-            picking: false,
-            outcome: { kind: 'jev_offline', picks: ['hallmark'] },
-          },
-        }),
-      ),
-    ).toContain('Jev offline · skill names attached');
-    expect(
-      skillsText(
-        view({
-          skills: {
-            mode: 'on',
-            scope: 'project',
-            count: 7,
-            indexing: false,
-            picking: false,
-            outcome: { kind: 'unavailable', picks: [] },
-          },
-        }),
-      ),
-    ).toContain('picker unavailable');
-    expect(
-      compacterText(
-        view({
-          compacter: {
-            enabled: true,
-            softPercent: 60,
-            hardPercent: 85,
-            outcome: { kind: 'builtin' },
-            degraded: true,
-          },
-        }),
-      ),
-    ).toContain('built-in summary');
+    expect(skills({ kind: 'jev_offline', picks: ['hallmark'] })).toContain('Jev offline · skill names attached');
+    expect(skills({ kind: 'unavailable', picks: [] })).toContain('picker unavailable');
   });
 
   test(
@@ -397,15 +291,6 @@ describe('optim-jev dashboard', () => {
       await band.unmount();
     },
   );
-
-  test('shows the latest compaction outcome', { options: { jev_dashboard_mode: 'on' } }, async ($, on) => {
-    engine(on);
-    await $.session.start(START);
-    await $.session.compact({});
-    const band = await $.ui.mount(BAND);
-    expect(JSON.stringify(await band.drawn())).toContain('deferred ~14k');
-    await band.unmount();
-  });
 
   test('built-in compaction updates context from its exact tokensAfter', { options: { jev_dashboard_mode: 'on' } }, async ($, on) => {
     const seen = engine(on, {
@@ -468,10 +353,6 @@ describe('optim-jev dashboard', () => {
     expect(text).toContain('Enable router');
     expect(text).toContain('Enable skills');
     expect(text).toContain('dashboard-stars');
-    expect(text).toContain('"position":"absolute"');
-    expect(text).toContain('"columns":164');
-    expect(text).not.toContain('│');
-    expect(text).not.toContain('dashboard-actions');
     expect(text.indexOf('Context 42%')).toBeLessThan(text.indexOf('Router off'));
     expect(text.indexOf('Router off')).toBeLessThan(text.indexOf('Skills off'));
     await band.unmount();

@@ -14,7 +14,7 @@ function engine(on: On) {
   on('store.set', () => ({ value: undefined }));
   on('env.get', () => ({ value: undefined }));
   on('settings.read', () => ({ value: {} }));
-  on('tool.list', () => ({ value: [{ name: 'ListSkills', description: '' }] }));
+  on('tool.list', () => ({ value: [{ name: 'ListSkills', description: '', mcp: false }] }));
   on('command.register', (_$, e) => ({ value: { command: e.name } }));
   on('ui.status', () => ({ value: undefined }));
   on('ui.invalidate', () => ({ value: undefined }));

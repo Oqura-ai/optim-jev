@@ -43,10 +43,8 @@ class ColdCache(unittest.TestCase):
         self.assertEqual(trigger_level(usage(50, cold=True), memory, CONFIG), "idle")
         self.assertIsNone(trigger_level(usage(50), memory, CONFIG))
         self.assertIsNone(trigger_level(usage(30, cold=True), memory, CONFIG))
-
-    def test_idle_time_alone_does_not_mean_cold(self):
         warm_but_idle = ContextUsage(100_000, WINDOW, idle_seconds=4000)
-        self.assertIsNone(trigger_level(warm_but_idle, CompactionMemory(), CONFIG))
+        self.assertIsNone(trigger_level(warm_but_idle, memory, CONFIG))  # idle time alone is not cold
 
     def test_a_cold_cache_applies_a_prune_too_small_to_apply_warm(self):
         cold = plan_compaction(transcript(), usage(50, cold=True), FakeJev(0.0), config=CONFIG, level="idle")
