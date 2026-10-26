@@ -33,6 +33,13 @@
       "options": ["on", "off"],
       "default": "on"
     },
+    "jev_compacter_preset": {
+      "type": "string",
+      "title": "Compaction: style",
+      "description": "balanced: the defaults. save-tokens: prunes earlier (from 50% full) and drops more old tool output. keep-context: prunes later (from 70%), keeps more, and never touches the newest 10 messages. Any number you set below overrides the style.",
+      "options": ["balanced", "save-tokens", "keep-context"],
+      "default": "balanced"
+    },
     "jev_compacter_soft_percent": {
       "type": "number",
       "title": "Compaction: soft threshold (%)",
@@ -72,6 +79,20 @@
       "title": "Compaction: recent messages kept",
       "description": "Newest messages never touched. Empty means 6.",
       "min": 0
+    },
+    "jev_compacter_cold_cache": {
+      "type": "string",
+      "title": "Compaction: when the prompt cache expires",
+      "description": "ask: once the main conversation's prompt cache is gone (idle past its lifetime, a resumed session, a model switch), offer a Jev prune so your next message re-reads less. auto: prune without asking. off: do nothing.",
+      "options": ["ask", "auto", "off"],
+      "default": "ask"
+    },
+    "jev_compacter_cache_ttl": {
+      "type": "string",
+      "title": "Compaction: prompt cache lifetime",
+      "description": "auto: as Claude Code picks it (one hour on a subscription within its plan's usage, five minutes otherwise; promptCacheTtl and the cache environment variables are honoured). Set 5m or 1h if auto guesses wrong, for example behind a gateway.",
+      "options": ["auto", "5m", "1h"],
+      "default": "auto"
     },
     "jev_skills_mode": {
       "type": "string",

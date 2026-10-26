@@ -118,8 +118,11 @@ class CompactResult:
 class ContextUsage:
     used_tokens: int
     window_tokens: int
-    # Time since the last turn ended; beyond the cache TTL the prompt cache is cold.
+    # Time since the main loop's last turn ended; logged only.
     idle_seconds: float = 0.0
+    # The main conversation's prompt cache is gone (idle past its TTL, resumed after that, or a
+    # model switch): the next request re-reads everything uncached, so a rewrite now costs nothing extra.
+    cache_cold: bool = False
 
     @property
     def percent(self) -> float:

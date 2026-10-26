@@ -30,7 +30,7 @@ def trigger_level(
         return None
     if usage.percent >= config.soft_percent:
         return "soft"
-    if usage.idle_seconds >= config.cache_idle_seconds and usage.percent > config.target_percent:
+    if usage.cache_cold and usage.percent > config.target_percent:
         return "idle"
     return None
 
@@ -74,7 +74,7 @@ def plan_compaction(
     soft/idle: apply when the result lands at or below target, frees min_freed_tokens, or the
     cache is cold anyway; otherwise defer and keep Jev's answers for the next round.
     manual: as soft, but the fallback is the summary the person asked for, not a deferral.
-    hard: apply only when the result lands below soft; otherwise fall back to the summary.
+    hard: apply only when it frees something and lands below soft; otherwise fall back to the summary.
     """
     if level is None:
         level = trigger_level(usage, memory, config)
@@ -102,13 +102,13 @@ def plan_compaction(
     )
     after_tokens = max(0, usage.used_tokens - freed)
     after = 100 * after_tokens / usage.window_tokens
-    cache_cold = usage.idle_seconds >= config.cache_idle_seconds
-
     if level == "hard":
-        apply = after < config.soft_percent
+        # Claude Code's idle compaction also arrives as auto (hard), often far below soft; a prune
+        # that frees nothing must not stand in for the summary it would have written.
+        apply = freed > 0 and after < config.soft_percent
     else:
         apply = freed > 0 and (
-            after <= config.target_percent or freed >= config.min_freed_tokens or cache_cold
+            after <= config.target_percent or freed >= config.min_freed_tokens or usage.cache_cold
         )
 
     verdict = _verdict(result)

@@ -1,10 +1,10 @@
 """Claude Code bridge: hooks/optim-jev.ts sends one JSON request on stdin, gets one JSON answer.
 
-    python -m optim_jev.tools.jev_compacter.tool check    -> {"level": "soft" | "hard" | null}
+    python -m optim_jev.tools.jev_compacter.tool check    -> {"level": "soft" | "hard" | "idle" | null}
     python -m optim_jev.tools.jev_compacter.tool compact
         -> {"action", "message", "log", "freedTokensEst", "messages"?}
 
-Request fields: session_id, project_dir, usage {used_tokens, window_tokens, idle_seconds}, options
+Request fields: session_id, project_dir, usage {used_tokens, window_tokens, idle_seconds, cache_cold}, options
 (the plugin's userConfig; this tool reads the `jev_compacter_` keys), and for `compact` the
 engine's messages plus the forced `level`. In the answer each kept message is `{"from": i}`
 (the engine's own message i, unchanged) or `{"from": i, "toolUses", "toolResults"}` (message i
@@ -43,6 +43,7 @@ def _usage(raw: dict[str, Any]) -> ContextUsage:
         used_tokens=int(raw.get("used_tokens") or 0),
         window_tokens=max(1, int(raw.get("window_tokens") or 1)),
         idle_seconds=float(raw.get("idle_seconds") or 0),
+        cache_cold=raw.get("cache_cold") is True,
     )
 
 
@@ -117,6 +118,8 @@ def _outcome_record(outcome: PolicyOutcome, usage: ContextUsage, message_count: 
         "level": outcome.level,
         "used_tokens": usage.used_tokens,
         "window_tokens": usage.window_tokens,
+        "idle_seconds": round(usage.idle_seconds),
+        "cache_cold": usage.cache_cold,
         "messages_before": message_count,
         "messages_after": len(result.messages) if result else message_count,
         "freed_tokens_est": outcome.freed_tokens,

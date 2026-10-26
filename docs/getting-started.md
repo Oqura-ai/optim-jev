@@ -58,6 +58,8 @@ Nothing to do. `/compact` and Claude Code's auto-compaction now prune stale cont
 
 Figures marked `(est.)` in `stats` are estimates. Unmarked figures are measured from the session.
 
+To prune earlier or keep more, pick a **Compaction: style** in `/config`: `balanced` (default), `save-tokens` or `keep-context`. See [Pick a style](jev-compacter.md#pick-a-style).
+
 ### jev-router: off by default
 
 ```
@@ -90,12 +92,15 @@ Set in `/config` under the plugin. All are optional.
 | `python` | `python` | Python executable used to run the tools |
 | `jev_dashboard_mode` | `on` | `off` hides the dashboard and restores the status line |
 | `jev_compacter_mode` | `on` | `off` returns to Claude Code's built-in summary |
+| `jev_compacter_preset` | `balanced` | `save-tokens` or `keep-context`; see [Pick a style](jev-compacter.md#pick-a-style) |
 | `jev_compacter_soft_percent` | 60 | context fill at which pruning is tried after a turn |
 | `jev_compacter_hard_percent` | 85 | fill at which compaction must shrink the context |
 | `jev_compacter_target_percent` | 40 | a prune landing at or below this is always applied |
 | `jev_compacter_min_freed_tokens` | 8000 | above the target, a prune must free at least this much |
 | `jev_compacter_keep_threshold` | 0.5 | Jev probability a tool call needs to stay |
 | `jev_compacter_preserve_recent_messages` | 6 | newest messages never touched |
+| `jev_compacter_cold_cache` | `ask` | once the prompt cache is gone, `ask` offers a Jev prune, `auto` runs it, `off` does nothing |
+| `jev_compacter_cache_ttl` | `auto` | the prompt cache lifetime; set `5m` or `1h` if `auto` guesses wrong |
 | `jev_router_mode` | `off` | routing default for new sessions |
 | `jev_router_cap` | `on` | Jev never picks a model above the session's |
 | `jev_router_escalate_after` | 3 | failed writes before the next subagent goes up a model |

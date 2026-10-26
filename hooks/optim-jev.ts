@@ -163,7 +163,12 @@ async function sessionFields($: Engine, options: PluginOptions) {
   return {
     session_id: await $.session.id(),
     project_dir: await $.session.root(),
-    usage: { used_tokens: used, window_tokens: context.window, idle_seconds: 0 },
+    usage: {
+      used_tokens: used,
+      window_tokens: context.window,
+      idle_seconds: lastActivityAt === null ? 0 : Math.max(0, ((await $.clock.now()) - lastActivityAt) / 1000),
+      cache_cold: (await coldReason($, options)) !== null,
+    },
     options: toolOptions(options),
     percent: context.percent ?? (100 * used) / context.window,
   };
@@ -375,8 +380,10 @@ async function rememberCompactedContext(
   try {
     const fields = knownWindow > 0 ? null : await sessionFields($, options);
     const windowTokens = knownWindow > 0 ? knownWindow : (fields?.usage.window_tokens ?? 0);
-    if (typeof result.tokensAfter === 'number' && windowTokens > 0) {
-      rememberContext((100 * result.tokensAfter) / windowTokens);
+    // Claude Code reports tokensAfter, but its published types don't declare it yet.
+    const { tokensAfter } = result as { tokensAfter?: unknown };
+    if (typeof tokensAfter === 'number' && windowTokens > 0) {
+      rememberContext((100 * tokensAfter) / windowTokens);
     } else if (fields && (fields.percent > 0 || dashboardContextPercent === null)) {
       rememberContext(fields.percent);
     }
@@ -789,6 +796,7 @@ function registerRouter(on: On, pluginOptions: PluginOptions): void {
 
   on('turn.start', async ($, e, next) => {
     turn = newTurn();
+    if (e.agentId === undefined) compacterTurnStart();
     return next(e);
   });
 
@@ -1110,7 +1118,173 @@ async function autoCompact($: Engine, options: PluginOptions): Promise<void> {
   }
 }
 
-export const register: Register = (on: On, options: PluginOptions) => {
+// ------------------------------------------------------------- cold prompt cache
+//
+// Once the main conversation's prompt cache is gone, the next request re-reads everything uncached
+// anyway, so a Jev prune costs no extra cache misses and makes that read smaller. Claude Code's own
+// summary is the opposite: its request re-reads the whole history uncached, so it is never used here.
+
+const COLD_CACHE_MODES = ['ask', 'auto', 'off'] as const;
+const CACHE_TTLS = ['auto', '5m', '1h'] as const;
+type CacheTtl = '5m' | '1h';
+// How far past the TTL before the cache counts as gone.
+const COLD_GRACE_MS = 15_000;
+// A resume or model switch: offer once the session has settled.
+const COLD_SOON_MS = 2_000;
+const PRUNE_NOW = 'Prune now';
+
+let interactive = false;
+let mainTurnRunning = false;
+// When Claude last responded on the main loop; the cache stays warm one TTL past it.
+let lastActivityAt: number | null = null;
+// Why the main conversation's cache is gone, once a timer, a resume or a model switch said so.
+let cacheColdReason: string | null = null;
+// One offer per cold period: the next main-loop turn starts a new one.
+let coldOffered = false;
+let coldTimer: { cancel(): void } | null = null;
+// The TTL Claude Code reported at the last model switch.
+let reportedTtl: CacheTtl | null = null;
+
+function ttlMs(ttl: CacheTtl): number {
+  return ttl === '1h' ? 3_600_000 : 300_000;
+}
+
+function durationText(ms: number): string {
+  const minutes = Math.round(ms / 60_000);
+  return minutes >= 60 ? `${Math.floor(minutes / 60)}h ${minutes % 60}m` : `${minutes}m`;
+}
+
+/** The main conversation's TTL, resolved in the order Claude Code's prompt-caching docs give. */
+async function cacheTtl($: Engine, options: PluginOptions): Promise<CacheTtl> {
+  const configured = oneOf(CACHE_TTLS, options['jev_compacter_cache_ttl'], 'auto');
+  if (configured !== 'auto') return configured;
+  if (reportedTtl) return reportedTtl;
+  const settings = await $.settings.read();
+  const raw = settings['env'];
+  const settingsEnv = raw && typeof raw === 'object' ? (raw as Record<string, unknown>) : {};
+  const fromEnv = (value: string | undefined, name: string) => value ?? settingsEnv[name];
+  if (fromEnv(await $.env.get('FORCE_PROMPT_CACHING_5M'), 'FORCE_PROMPT_CACHING_5M') === '1') return '5m';
+  const chosen = [
+    fromEnv(await $.env.get('CLAUDE_CODE_PROMPT_CACHE_TTL'), 'CLAUDE_CODE_PROMPT_CACHE_TTL'),
+    settings['promptCacheTtl'],
+  ].find((value): value is CacheTtl => value === '5m' || value === '1h');
+  if (chosen) return chosen;
+  if (fromEnv(await $.env.get('ENABLE_PROMPT_CACHING_1H'), 'ENABLE_PROMPT_CACHING_1H') === '1') return '1h';
+  // The hour is the default only on a subscription within its plan's usage.
+  const plan = ((await $.session.usage()).rateLimits ?? []).filter(
+    (limit) => limit.kind === 'five_hour' || limit.kind === 'seven_day',
+  );
+  return plan.length > 0 && plan.every((limit) => limit.percentUsed < 100) ? '1h' : '5m';
+}
+
+/** Why the main conversation's cache is gone, or null while it may still be warm. */
+async function coldReason($: Engine, options: PluginOptions): Promise<string | null> {
+  if (cacheColdReason !== null) return cacheColdReason;
+  if (lastActivityAt === null || mainTurnRunning) return null;
+  try {
+    const idleMs = (await $.clock.now()) - lastActivityAt;
+    if (idleMs < ttlMs('5m')) return null;
+    return idleMs >= ttlMs(await cacheTtl($, options)) ? `idle ${durationText(idleMs)}` : null;
+  } catch {
+    return null;
+  }
+}
+
+function coldCacheMode(options: PluginOptions) {
+  return oneOf(COLD_CACHE_MODES, options['jev_compacter_cold_cache'], 'ask');
+}
+
+function cancelColdTimer(): void {
+  coldTimer?.cancel();
+  coldTimer = null;
+}
+
+/** A main-loop request is about to go out: whatever was cold is cached again after it. */
+function compacterTurnStart(): void {
+  mainTurnRunning = true;
+  cancelColdTimer();
+  cacheColdReason = null;
+  coldOffered = false;
+}
+
+/** After a main-loop turn: the cache dies one TTL after Claude's last response unless a request comes first. */
+async function armColdTimer($: Engine, options: PluginOptions): Promise<void> {
+  cancelColdTimer();
+  if (!compacterOn || !interactive || coldCacheMode(options) === 'off') return;
+  try {
+    const wait = ttlMs(await cacheTtl($, options)) + COLD_GRACE_MS;
+    if (mainTurnRunning) return;
+    coldTimer = $.clock.after(wait, () => void cacheWentCold($, options, `idle ${durationText(wait)}`));
+  } catch (error) {
+    $.ui.log(`jev-compacter: cold-cache timer not set (${errorText(error)})`, { to: 'debug' });
+  }
+}
+
+/** A resume or model switch already lost the cache: offer once the session has settled. */
+function coldSoon($: Engine, options: PluginOptions, reason: string): void {
+  cacheColdReason = reason;
+  cancelColdTimer();
+  if (!compacterOn || coldCacheMode(options) === 'off') return;
+  try {
+    coldTimer = $.clock.after(COLD_SOON_MS, () => void cacheWentCold($, options, reason));
+  } catch (error) {
+    $.ui.log(`jev-compacter: cold-cache check not scheduled (${errorText(error)})`, { to: 'debug' });
+  }
+}
+
+/**
+ * Offers (or runs) a Jev prune while the session is idle, so the uncached read the next prompt
+ * causes is smaller. It runs /compact with pendingLevel set, as the dashboard's button does: the
+ * host refuses `$.session.compact()` from prompt.submit and command hooks, and from a timer it
+ * skips this plugin's own session.compact hook.
+ */
+async function cacheWentCold($: Engine, options: PluginOptions, reason: string): Promise<void> {
+  coldTimer = null;
+  if (mainTurnRunning) return;
+  cacheColdReason = reason;
+  const mode = coldCacheMode(options);
+  if (!compacterOn || !interactive || coldOffered || mode === 'off') return;
+  coldOffered = true;
+  try {
+    const { percent, ...request } = await sessionFields($, options);
+    const { level } = await runTool<CheckAnswer>($, options, TOOL_MODULE, 'check', request);
+    if (!level) return;
+    if (mode === 'ask') {
+      const question =
+        `The prompt cache is gone (${reason}), so your next message re-reads the whole context ` +
+        `(${Math.round(percent)}% full) uncached. Prune stale tool output with Jev now to make that read smaller?`;
+      if ((await $.ui.ask(question, [PRUNE_NOW, 'Not now'])) !== PRUNE_NOW || mainTurnRunning) return;
+    }
+    pendingLevel = 'idle';
+    await $.command.run({ command: 'compact', args: '' });
+  } catch (error) {
+    $.ui.log(`jev-compacter: cold-cache prune skipped (${errorText(error)})`, { to: 'debug' });
+  } finally {
+    pendingLevel = null;
+  }
+}
+
+const COMPACTER_PRESETS = {
+  balanced: {},
+  'save-tokens': { soft_percent: 50, keep_threshold: 0.6, min_freed_tokens: 4_000 },
+  'keep-context': { soft_percent: 70, keep_threshold: 0.35, preserve_recent_messages: 10 },
+} satisfies Record<string, Record<string, number>>;
+type CompacterPreset = keyof typeof COMPACTER_PRESETS;
+const PRESET_NAMES = Object.keys(COMPACTER_PRESETS) as CompacterPreset[];
+
+/** The preset's numbers, under any compaction option the person set themselves. */
+function withPreset(options: PluginOptions): PluginOptions {
+  const preset: Record<string, number> = COMPACTER_PRESETS[oneOf(PRESET_NAMES, options['jev_compacter_preset'], 'balanced')];
+  const resolved: Record<string, unknown> = { ...options };
+  for (const [name, value] of Object.entries(preset)) {
+    const key = `jev_compacter_${name}`;
+    if (resolved[key] === undefined || resolved[key] === null || resolved[key] === '') resolved[key] = value;
+  }
+  return resolved as PluginOptions;
+}
+
+export const register: Register = (on: On, configured: PluginOptions) => {
+  const options = withPreset(configured);
   pluginOptions = options;
   compacterOn = options['jev_compacter_mode'] !== 'off';
   dashboardOn = options['jev_dashboard_mode'] !== 'off';
@@ -1129,6 +1303,7 @@ export const register: Register = (on: On, options: PluginOptions) => {
   });
 
   on('session.start', async ($, e, next) => {
+    interactive = e.isInteractive;
     stopDashboardStars();
     dashboardSessionId = await $.session.id();
     dashboardActivity = null;
@@ -1162,6 +1337,22 @@ export const register: Register = (on: On, options: PluginOptions) => {
     return next(e);
   });
 
+  on('classic.SessionStart', async ($, e, next) => {
+    if ((e.source === 'resume' || e.source === 'fork') && e.prompt_cache_likely_expired) {
+      coldSoon($, options, `resumed after ${durationText((e.seconds_since_last_response ?? 0) * 1000)}`);
+    }
+    return next(e);
+  });
+
+  // Each model has its own cache: after a switch the next request reads everything uncached.
+  on('classic.PostModelSwitch', async ($, e, next) => {
+    reportedTtl = e.cache_ttl;
+    if ((e.source === 'command' || e.source === 'picker') && e.from_model !== e.to_model && !mainTurnRunning) {
+      coldSoon($, options, `switched to ${e.requested_model ?? e.to_model}`);
+    }
+    return next(e);
+  });
+
   on('session.compact', async ($, e, next) => {
     if (!compacterOn || e.agentId !== undefined || e.trigger === 'precompute') {
       const result = await next(e);
@@ -1172,8 +1363,9 @@ export const register: Register = (on: On, options: PluginOptions) => {
       }
       return result;
     }
+    // pendingLevel: this plugin started it, by $.session.compact() (soft) or by running /compact (idle).
     const level: Level =
-      e.trigger === 'manual' ? 'manual' : e.trigger === 'auto' ? 'hard' : (pendingLevel ?? 'soft');
+      e.trigger === 'auto' ? 'hard' : (pendingLevel ?? (e.trigger === 'manual' ? 'manual' : 'soft'));
     pendingLevel = null;
     const mustShrink = level === 'manual' || level === 'hard';
     let contextWindow = 0;
@@ -1251,7 +1443,10 @@ export const register: Register = (on: On, options: PluginOptions) => {
     }
     await routerTurnComplete($, e);
     if (e.agentId === undefined) {
+      mainTurnRunning = false;
+      lastActivityAt = await $.clock.now();
       if (compacterOn && !checking) await autoCompact($, options);
+      await armColdTimer($, options);
       if (!compacterOn) {
         try {
           rememberContext((await sessionFields($, options)).percent);
@@ -1278,7 +1473,7 @@ export const register: Register = (on: On, options: PluginOptions) => {
       if (e.surface === 'terminal' && columns >= 60 && maxRows >= 5 && 'Raster' in elements) {
         animateDashboardStars($, e.requestId, Math.max(1, columns - 4));
       } else stopDashboardStars();
-      return dashboardTree(
+      const tree = dashboardTree(
         elements,
         dashboardView(),
         {
@@ -1297,6 +1492,8 @@ export const register: Register = (on: On, options: PluginOptions) => {
         dashboardStarFrameNumber,
         maxRows,
       );
+      // No room at all: let Claude Code draw its own (empty) area.
+      return tree ?? next(e);
     } catch (error) {
       $.ui.log(`optim-jev: dashboard not rendered (${errorText(error)})`, { to: 'debug' });
       return next(e);
