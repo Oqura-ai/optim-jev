@@ -30,6 +30,16 @@ class CodexCli(unittest.TestCase):
             code = cli.main(["--project", str(self.root), "codex", *args])
         return code, stdout.getvalue(), stderr.getvalue()
 
+    def setup_codex(self, *extra: str, key: str | None = "secret") -> tuple[int, str, str]:
+        env = {"TYPESAFE_API_KEY": key} if key else {}
+        with (
+            mock.patch.dict(os.environ, env, clear=key is None),
+            mock.patch.object(cli, "_codex_models", return_value=self.models),
+        ):
+            return self.invoke(
+                "setup", "--fast", "gpt-fast", "--balanced", "gpt-balanced", "--strong", "gpt-strong", *extra
+            )
+
     def test_model_discovery_decodes_utf8_and_filters_hidden_models(self):
         result = mock.Mock(
             returncode=0,
@@ -66,20 +76,7 @@ class CodexCli(unittest.TestCase):
         )
 
     def test_setup_writes_validated_catalog_then_enables_routing(self):
-        with (
-            mock.patch.dict(os.environ, {"TYPESAFE_API_KEY": "secret"}),
-            mock.patch.object(cli, "_codex_models", return_value=self.models),
-        ):
-            code, output, errors = self.invoke(
-                "setup",
-                "--fast",
-                "gpt-fast",
-                "--balanced",
-                "gpt-balanced",
-                "--strong",
-                "gpt-strong",
-                "--yes",
-            )
+        code, output, errors = self.setup_codex("--yes")
         self.assertEqual((code, errors), (0, ""))
         self.assertIn("configured and enabled", output)
         config = json.loads((self.root / ".optim-jev/config.json").read_text())
@@ -93,37 +90,12 @@ class CodexCli(unittest.TestCase):
         self.assertTrue((self.root / ".optim-jev/jev_router/RULES.codex.md").is_file())
         self.assertFalse((self.root / ".optim-jev/jev_router/rules.json").exists())
 
-    def test_setup_without_api_key_fails_without_writing_state(self):
-        with mock.patch.dict(os.environ, {}, clear=True):
-            code, _, errors = self.invoke(
-                "setup",
-                "--fast",
-                "gpt-fast",
-                "--balanced",
-                "gpt-balanced",
-                "--strong",
-                "gpt-strong",
-                "--yes",
-            )
+    def test_setup_without_a_key_or_when_cancelled_writes_nothing(self):
+        code, _, errors = self.setup_codex("--yes", key=None)
         self.assertEqual(code, 2)
         self.assertIn("TYPESAFE_API_KEY", errors)
-        self.assertFalse((self.root / ".optim-jev").exists())
-
-    def test_cancelled_setup_writes_nothing(self):
-        with (
-            mock.patch.dict(os.environ, {"TYPESAFE_API_KEY": "secret"}),
-            mock.patch.object(cli, "_codex_models", return_value=self.models),
-            mock.patch("builtins.input", return_value="no"),
-        ):
-            code, output, errors = self.invoke(
-                "setup",
-                "--fast",
-                "gpt-fast",
-                "--balanced",
-                "gpt-balanced",
-                "--strong",
-                "gpt-strong",
-            )
+        with mock.patch("builtins.input", return_value="no"):
+            code, output, errors = self.setup_codex()
         self.assertEqual((code, errors), (0, ""))
         self.assertIn("no files changed", output)
         self.assertFalse((self.root / ".optim-jev").exists())
@@ -132,20 +104,7 @@ class CodexCli(unittest.TestCase):
         folder = self.root / ".optim-jev/jev_router"
         folder.mkdir(parents=True)
         (folder / "rules.codex.json").write_text('{"paths":{"src/":{"write":["unknown"]}}}')
-        with (
-            mock.patch.dict(os.environ, {"TYPESAFE_API_KEY": "secret"}),
-            mock.patch.object(cli, "_codex_models", return_value=self.models),
-        ):
-            code, _, errors = self.invoke(
-                "setup",
-                "--fast",
-                "gpt-fast",
-                "--balanced",
-                "gpt-balanced",
-                "--strong",
-                "gpt-strong",
-                "--yes",
-            )
+        code, _, errors = self.setup_codex("--yes")
         self.assertEqual(code, 2)
         self.assertIn("unknown model", errors)
         self.assertFalse((folder / "models.codex.json").exists())
@@ -155,20 +114,7 @@ class CodexCli(unittest.TestCase):
         folder = self.root / ".optim-jev"
         folder.mkdir()
         (folder / "config.json").write_text("{broken")
-        with (
-            mock.patch.dict(os.environ, {"TYPESAFE_API_KEY": "secret"}),
-            mock.patch.object(cli, "_codex_models", return_value=self.models),
-        ):
-            code, _, errors = self.invoke(
-                "setup",
-                "--fast",
-                "gpt-fast",
-                "--balanced",
-                "gpt-balanced",
-                "--strong",
-                "gpt-strong",
-                "--yes",
-            )
+        code, _, errors = self.setup_codex("--yes")
         self.assertEqual(code, 2)
         self.assertIn("not valid JSON", errors)
         self.assertFalse((folder / "jev_router/models.codex.json").exists())
@@ -178,12 +124,8 @@ class CodexCli(unittest.TestCase):
         self.assertEqual((code, errors), (0, ""))
         self.assertIn("Router: off", output)
         self.assertIn("Models: not configured", output)
+        self.assertEqual(json.loads(self.invoke("status", "--json")[1])["router"], "off")
         self.assertFalse((self.root / ".optim-jev").exists())
-
-    def test_status_json_is_machine_readable(self):
-        code, output, errors = self.invoke("status", "--json")
-        self.assertEqual((code, errors), (0, ""))
-        self.assertEqual(json.loads(output)["router"], "off")
 
     def test_off_preserves_non_codex_configuration(self):
         folder = self.root / ".optim-jev"
@@ -226,41 +168,30 @@ class CodexCli(unittest.TestCase):
         self.assertEqual((code, errors), (0, ""))
         self.assertIn("tests → fast", output)
 
-    def test_install_uses_native_codex_commands_without_a_shell(self):
-        completed = mock.Mock(returncode=0, stdout="", stderr="")
-        with (
-            mock.patch.object(cli, "_codex_executable", return_value="codex.cmd"),
-            mock.patch.object(cli.subprocess, "run", return_value=completed) as run,
-        ):
-            code, output, errors = self.invoke("install", "--ref", "v1.2.3")
-        self.assertEqual((code, errors), (0, ""))
-        self.assertIn("restart Codex", output)
-        commands = [call.args[0] for call in run.call_args_list]
-        self.assertEqual(
-            commands,
-            [
-                ["codex.cmd", "plugin", "marketplace", "add", "Oqura-ai/optim-jev", "--ref", "v1.2.3"],
-                ["codex.cmd", "plugin", "add", "optim-jev@optim-jev"],
-            ],
-        )
-        self.assertTrue(all(call.kwargs["shell"] is False for call in run.call_args_list))
+    def test_install_and_uninstall_run_native_codex_commands_in_order_without_a_shell(self):
+        def run(*args: str) -> tuple[str, list[list[str]]]:
+            completed = mock.Mock(returncode=0, stdout="", stderr="")
+            with (
+                mock.patch.object(cli, "_codex_executable", return_value="codex.cmd"),
+                mock.patch.object(cli.subprocess, "run", return_value=completed) as process,
+            ):
+                code, output, errors = self.invoke(*args)
+            self.assertEqual((code, errors), (0, ""))
+            self.assertTrue(all(call.kwargs["shell"] is False for call in process.call_args_list))
+            return output, [call.args[0] for call in process.call_args_list]
 
-    def test_uninstall_removes_plugin_before_marketplace(self):
-        completed = mock.Mock(returncode=0, stdout="", stderr="")
-        with (
-            mock.patch.object(cli, "_codex_executable", return_value="codex.cmd"),
-            mock.patch.object(cli.subprocess, "run", return_value=completed) as run,
-        ):
-            code, output, errors = self.invoke("uninstall")
-        self.assertEqual((code, errors), (0, ""))
+        output, commands = run("install", "--ref", "v1.2.3")
+        self.assertIn("restart Codex", output)
+        self.assertEqual(commands, [
+            ["codex.cmd", "plugin", "marketplace", "add", "Oqura-ai/optim-jev", "--ref", "v1.2.3"],
+            ["codex.cmd", "plugin", "add", "optim-jev@optim-jev"],
+        ])
+        output, commands = run("uninstall")
         self.assertIn("pip uninstall", output)
-        self.assertEqual(
-            [call.args[0] for call in run.call_args_list],
-            [
-                ["codex.cmd", "plugin", "remove", "optim-jev@optim-jev"],
-                ["codex.cmd", "plugin", "marketplace", "remove", "optim-jev"],
-            ],
-        )
+        self.assertEqual(commands, [
+            ["codex.cmd", "plugin", "remove", "optim-jev@optim-jev"],
+            ["codex.cmd", "plugin", "marketplace", "remove", "optim-jev"],
+        ])
 
 
 if __name__ == "__main__":

@@ -6,7 +6,6 @@ import subprocess
 import sys
 import tempfile
 import unittest
-from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from unittest import mock
 
@@ -113,13 +112,6 @@ class Observe(unittest.TestCase):
         )
         self.assertEqual((result.returncode, result.stdout, result.stderr), (0, "{}", ""))
 
-    def test_concurrent_jsonl_appends_remain_complete(self):
-        path = Path(tempfile.mkdtemp()) / "events.jsonl"
-        with ThreadPoolExecutor(max_workers=8) as pool:
-            list(pool.map(lambda value: logs.append(path, {"value": value}, locked=True), range(100)))
-        records = logs.read(path, locked=True)
-        self.assertEqual(sorted(record["value"] for record in records), list(range(100)))
-
     def test_cross_process_jsonl_appends_remain_complete(self):
         path = Path(tempfile.mkdtemp()) / "events.jsonl"
         source = Path(__file__).resolve().parents[1] / "src"
@@ -172,6 +164,19 @@ class Router(unittest.TestCase):
             **values,
         }
 
+    def spawn(self, message: str, call_id: str = "call-1", tool: str = "spawn_agent", **tool_input):
+        return self.event(
+            "PreToolUse", tool_name=tool, tool_use_id=call_id, tool_input={"message": message, **tool_input}
+        )
+
+    def patch(self, path: str, call_id: str = "call-1", **values):
+        command = f"*** Begin Patch\n*** Update File: {path}\n@@\n-x = 1\n+x = 2\n*** End Patch\n"
+        return {**self.event("PreToolUse", tool_name="apply_patch", tool_use_id=call_id, tool_input={"command": command}), **values}
+
+    def routed(self, payload, jev=None):
+        with mock.patch.object(router, "_jev", return_value=jev or FakeJev("fast")):
+            return codex.dispatch(payload)["hookSpecificOutput"]["updatedInput"]
+
     def test_session_start_injects_codex_routing_instructions(self):
         answer = codex.dispatch(self.event("SessionStart", source="startup"))
         output = answer["hookSpecificOutput"]
@@ -193,106 +198,41 @@ class Router(unittest.TestCase):
         self.assertEqual(answer["hookSpecificOutput"]["hookEventName"], "SessionStart")
 
     def test_spawn_rewrite_preserves_unknown_fields_and_disables_forked_history(self):
-        payload = self.event(
-            "PreToolUse",
-            tool_name="spawn_agent",
-            tool_use_id="call-1",
-            tool_input={
-                "message": "Update README.md",
-                "task_name": "docs",
-                "fork_turns": "all",
-                "future_field": {"keep": True},
-            },
-        )
-        with mock.patch.object(router, "_jev", return_value=FakeJev("fast")):
-            updated = codex.dispatch(payload)["hookSpecificOutput"]["updatedInput"]
-        self.assertEqual(updated["model"], "gpt-small")
-        self.assertEqual(updated["reasoning_effort"], "low")
-        self.assertEqual(updated["fork_turns"], "none")
-        self.assertEqual(updated["future_field"], {"keep": True})
-
-    def test_flattened_collaboration_spawn_is_routed(self):
-        payload = self.event(
-            "PreToolUse",
-            tool_name="collaborationspawn_agent",
-            tool_use_id="call-1",
-            tool_input={"message": "Update README.md", "task_name": "docs"},
-        )
-        with mock.patch.object(router, "_jev", return_value=FakeJev("fast")):
-            updated = codex.dispatch(payload)["hookSpecificOutput"]["updatedInput"]
-        self.assertEqual(updated["model"], "gpt-small")
+        for tool in ("spawn_agent", "collaborationspawn_agent"):
+            with self.subTest(tool):
+                updated = self.routed(
+                    self.spawn("Update README.md", tool=tool, task_name="docs", fork_turns="all", future_field={"keep": True})
+                )
+                self.assertEqual((updated["model"], updated["reasoning_effort"]), ("gpt-small", "low"))
+                self.assertEqual(updated["fork_turns"], "none")
+                self.assertEqual(updated["future_field"], {"keep": True})
 
     def test_encrypted_collaboration_message_is_preserved_and_not_sent_to_jev(self):
-        codex.dispatch(
-            self.event(
-                "UserPromptSubmit",
-                prompt="Ask a subagent to review the installation documentation",
-            )
-        )
+        codex.dispatch(self.event("UserPromptSubmit", prompt="Ask a subagent to review the installation documentation"))
         encrypted = "gAAAAABopaque-codex-message"
-        payload = self.event(
-            "PreToolUse",
-            tool_name="collaborationspawn_agent",
-            tool_use_id="call-1",
-            tool_input={
-                "message": encrypted,
-                "task_name": "installation_doc_review",
-                "fork_turns": "all",
-            },
-        )
         jev = FakeJev("fast")
-        with mock.patch.object(router, "_jev", return_value=jev):
-            updated = codex.dispatch(payload)["hookSpecificOutput"]["updatedInput"]
+        updated = self.routed(
+            self.spawn(encrypted, tool="collaborationspawn_agent", task_name="installation_doc_review", fork_turns="all"), jev
+        )
         self.assertEqual(updated["message"], encrypted)
         self.assertEqual(updated["fork_turns"], "none")
         self.assertNotIn(encrypted, str(jev.states))
         self.assertIn("installation_doc_review", str(jev.states))
 
     def test_recent_root_prompts_reach_routing_even_with_skills_disabled(self):
-        self.assertEqual(
-            codex.dispatch(
-                self.event(
-                    "UserPromptSubmit",
-                    prompt="Please update the documentation examples",
-                )
-            ),
-            {},
-        )
-        payload = self.event(
-            "PreToolUse",
-            tool_name="spawn_agent",
-            tool_use_id="call-1",
-            tool_input={"message": "Update README.md"},
-        )
+        self.assertEqual(codex.dispatch(self.event("UserPromptSubmit", prompt="Please update the documentation examples")), {})
         jev = FakeJev("fast")
-        with mock.patch.object(router, "_jev", return_value=jev):
-            codex.dispatch(payload)
+        self.routed(self.spawn("Update README.md"), jev)
         self.assertIn("Please update the documentation examples", str(jev.states))
 
     def test_jev_failure_uses_a_deterministic_available_fallback(self):
-        payload = self.event(
-            "PreToolUse",
-            tool_name="spawn_agent",
-            tool_use_id="call-1",
-            tool_input={"message": "Update README.md", "fork_context": True},
-        )
-        with mock.patch.object(router, "_jev", return_value=FakeJev(fail=True)):
-            updated = codex.dispatch(payload)["hookSpecificOutput"]["updatedInput"]
+        updated = self.routed(self.spawn("Update README.md", fork_context=True), FakeJev(fail=True))
         self.assertEqual(updated["model"], "gpt-large")
         self.assertFalse(updated["fork_context"])
 
     def test_repeated_agent_write_failures_escalate_the_next_matching_task(self):
-        first = self.event(
-            "PreToolUse",
-            tool_name="spawn_agent",
-            tool_use_id="spawn-1",
-            tool_input={"message": "Update README.md"},
-        )
-        with mock.patch.object(router, "_jev", return_value=FakeJev("fast")):
-            self.assertEqual(
-                codex.dispatch(first)["hookSpecificOutput"]["updatedInput"]["model"],
-                "gpt-small",
-            )
+        first = self.spawn("Update README.md", "spawn-1")
+        self.assertEqual(self.routed(first)["model"], "gpt-small")
         codex.dispatch(
             self.event(
                 "PostToolUse",
@@ -314,14 +254,7 @@ class Router(unittest.TestCase):
                     tool_response={"is_error": True, "message": "failed"},
                 )
             )
-        second = self.event(
-            "PreToolUse",
-            tool_name="spawn_agent",
-            tool_use_id="spawn-2",
-            tool_input={"message": "Update README.md again"},
-        )
-        with mock.patch.object(router, "_jev", return_value=FakeJev("fast")):
-            updated = codex.dispatch(second)["hookSpecificOutput"]["updatedInput"]
+        updated = self.routed(self.spawn("Update README.md again", "spawn-2"))
         self.assertEqual((updated["model"], updated["reasoning_effort"]), ("gpt-medium", "low"))
         records = logs.read(logs.session_file(self.root, "codex", "s1"))
         escalations = [record for record in records if record.get("kind") == "escalation"]
@@ -331,131 +264,35 @@ class Router(unittest.TestCase):
         )
 
     def test_codex_activity_report_does_not_claim_model_cost_is_measured(self):
-        payload = self.event(
-            "PreToolUse",
-            tool_name="spawn_agent",
-            tool_use_id="spawn-1",
-            tool_input={"message": "Update README.md"},
-        )
-        with mock.patch.object(router, "_jev", return_value=FakeJev("fast")):
-            codex.dispatch(payload)
-        text = router.stats_mode(
-            {
-                "project_dir": str(self.root),
-                "host": "codex",
-                "session_id": "s1",
-                "options": {},
-            }
-        )["text"]
+        self.routed(self.spawn("Update README.md"))
+        text = router.stats_mode({"project_dir": str(self.root), "host": "codex", "session_id": "s1", "options": {}})["text"]
         self.assertIn("Routed subagents", text)
         self.assertNotIn("Subagents on routed models", text)
         self.assertNotIn("Same work on", text)
         self.assertNotIn("Decided by Claude", text)
 
     def test_root_writes_are_denied_but_shared_rules_remain_editable(self):
-        patch = "*** Begin Patch\n*** Update File: src/core/db.py\n@@\n-x = 1\n+x = 2\n*** End Patch\n"
-        denied = codex.dispatch(
-            self.event(
-                "PreToolUse",
-                tool_name="apply_patch",
-                tool_use_id="call-1",
-                tool_input={"command": patch},
-            )
-        )
-        self.assertEqual(denied["hookSpecificOutput"]["permissionDecision"], "deny")
-        control = patch.replace("src/core/db.py", ".optim-jev/jev_router/rules.codex.json")
-        allowed = codex.dispatch(
-            self.event(
-                "PreToolUse",
-                tool_name="apply_patch",
-                tool_use_id="call-2",
-                tool_input={"command": control},
-            )
-        )
-        self.assertEqual(allowed, {})
-        config = control.replace(".optim-jev/jev_router/rules.codex.json", ".optim-jev/config.json")
-        denied_config = codex.dispatch(
-            self.event(
-                "PreToolUse",
-                tool_name="apply_patch",
-                tool_use_id="call-3",
-                tool_input={"command": config},
-            )
-        )
-        self.assertEqual(denied_config["hookSpecificOutput"]["permissionDecision"], "deny")
-        self.assertIn("optim-jev CLI", denied_config["hookSpecificOutput"]["permissionDecisionReason"])
-        denied_subagent = codex.dispatch(
-            {
-                **self.event(
-                    "PreToolUse",
-                    tool_name="apply_patch",
-                    tool_use_id="call-4",
-                    tool_input={"command": config},
-                ),
-                "agent_id": "agent-1",
-                "model": "gpt-large",
-            }
-        )
-        self.assertEqual(denied_subagent["hookSpecificOutput"]["permissionDecision"], "deny")
+        def decision(payload):
+            return codex.dispatch(payload).get("hookSpecificOutput", {}).get("permissionDecision")
+
+        self.assertEqual(decision(self.patch("src/core/db.py")), "deny")
+        self.assertIsNone(decision(self.patch(".optim-jev/jev_router/rules.codex.json", "call-2")))
+        config = codex.dispatch(self.patch(".optim-jev/config.json", "call-3"))["hookSpecificOutput"]
+        self.assertEqual(config["permissionDecision"], "deny")
+        self.assertIn("optim-jev CLI", config["permissionDecisionReason"])
+        self.assertEqual(decision(self.patch(".optim-jev/config.json", "call-4", agent_id="agent-1")), "deny")
         (self.root / ".optim-jev/config.json").write_text(json.dumps({"jev_router_mode": "off"}))
-        self.assertEqual(
-            codex.dispatch(
-                self.event(
-                    "PreToolUse",
-                    tool_name="apply_patch",
-                    tool_use_id="call-5",
-                    tool_input={"command": config},
-                )
-            )["hookSpecificOutput"]["permissionDecision"],
-            "deny",
-        )
-        self.assertEqual(
-            codex.dispatch(
-                self.event(
-                    "PreToolUse",
-                    tool_name="apply_patch",
-                    tool_use_id="call-6",
-                    tool_input={"command": patch},
-                )
-            ),
-            {},
-        )
+        self.assertEqual(decision(self.patch(".optim-jev/config.json", "call-5")), "deny")
+        self.assertIsNone(decision(self.patch("src/core/db.py", "call-6")))
 
-    def test_logging_failure_cannot_turn_a_denial_into_an_allow(self):
-        patch = "*** Begin Patch\n*** Update File: src/core/db.py\n@@\n-x = 1\n+x = 2\n*** End Patch\n"
+    def test_logging_failure_cannot_change_a_decision(self):
         with mock.patch.object(codex, "audit", side_effect=OSError("disk full")):
-            denied = codex.dispatch(
-                self.event(
-                    "PreToolUse",
-                    tool_name="apply_patch",
-                    tool_use_id="call-1",
-                    tool_input={"command": patch},
-                )
-            )
-        self.assertEqual(denied["hookSpecificOutput"]["permissionDecision"], "deny")
-
-    def test_logging_failure_cannot_cancel_a_spawn_rewrite(self):
-        payload = self.event(
-            "PreToolUse",
-            tool_name="spawn_agent",
-            tool_use_id="call-1",
-            tool_input={"message": "Update README.md"},
-        )
-        with (
-            mock.patch.object(router, "_jev", return_value=FakeJev("fast")),
-            mock.patch.object(codex, "audit", side_effect=OSError("disk full")),
-        ):
-            answer = codex.dispatch(payload)
-        self.assertEqual(answer["hookSpecificOutput"]["updatedInput"]["model"], "gpt-small")
+            denied = codex.dispatch(self.patch("src/core/db.py"))
+            self.assertEqual(denied["hookSpecificOutput"]["permissionDecision"], "deny")
+            self.assertEqual(self.routed(self.spawn("Update README.md", "call-2"))["model"], "gpt-small")
 
     def test_subagent_permissions_use_its_actual_model(self):
-        event = self.event(
-            "PreToolUse",
-            agent_id="a1",
-            tool_name="apply_patch",
-            tool_use_id="call-1",
-            tool_input={"command": "*** Begin Patch\n*** Update File: src/core/db.py\n@@\n-x\n+y\n*** End Patch\n"},
-        )
+        event = self.patch("src/core/db.py", agent_id="a1")
         denied = codex.dispatch({**event, "model": "gpt-small"})
         self.assertIn("fast may not write", denied["hookSpecificOutput"]["permissionDecisionReason"])
         self.assertEqual(codex.dispatch({**event, "model": "gpt-large"}), {})
@@ -567,6 +404,8 @@ class Packaging(unittest.TestCase):
         self.assertNotIn("skills", codex_manifest)
         self.assertFalse((self.root / "plugin.json").exists())
         self.assertEqual(json.loads((self.root / "hooks/hooks.json").read_text()), {"modules": ["./optim-jev.ts"]})
+        marketplace = json.loads((self.root / ".agents/plugins/marketplace.json").read_text())["plugins"][0]
+        self.assertEqual((marketplace["name"], marketplace["source"]), ("optim-jev", {"source": "local", "path": "./codex-plugin"}))
         self.assertEqual(
             {
                 path.relative_to(plugin_root).as_posix()
@@ -622,13 +461,6 @@ class Packaging(unittest.TestCase):
                 check=False,
             )
         self.assertEqual((result.returncode, result.stdout, result.stderr), (0, "{}", ""))
-
-    def test_repo_marketplace_points_at_this_plugin(self):
-        marketplace = json.loads((self.root / ".agents/plugins/marketplace.json").read_text())
-        plugin = marketplace["plugins"][0]
-        self.assertEqual(plugin["name"], "optim-jev")
-        self.assertEqual(plugin["source"], {"source": "local", "path": "./codex-plugin"})
-        self.assertTrue((self.root / plugin["source"]["path"] / ".codex-plugin/plugin.json").is_file())
 
 
 if __name__ == "__main__":

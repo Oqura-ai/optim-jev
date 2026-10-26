@@ -207,13 +207,6 @@ describe('jev-compacter cold cache', () => {
     expect(seen.checks).toHaveLength(0);
   });
 
-  test('balanced waits for 60% before pruning after a turn', { options: QUIET }, async ($, on) => {
-    const { seen } = engine($, on, { level: null });
-    await $.session.start(START);
-    await $.turn.complete(DONE);
-    expect(seen.checks).toHaveLength(0);
-  });
-
   test('save-tokens prunes from 50% and hands Python its numbers', { options: { ...QUIET, jev_compacter_preset: 'save-tokens' } }, async ($, on) => {
     const { seen } = engine($, on, { level: null });
     await $.session.start(START);

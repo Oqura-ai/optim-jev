@@ -59,7 +59,8 @@ class Index(unittest.TestCase):
         self.env.stop()
 
     def test_project_scope_reads_only_the_project(self):
-        self.assertEqual([s.name for s in index.load(self.root, False)], ["deploy"])
+        skills = index.load(self.root, False)
+        self.assertEqual([(s.name, s.description) for s in skills], [("deploy", "Ship the app to staging")])  # block scalar joined
         cached = json.loads((self.root / ".optim-jev/jev_skills/index.json").read_text())
         self.assertEqual(len(cached["signature"][0]), 2)
 
@@ -68,9 +69,6 @@ class Index(unittest.TestCase):
         self.assertEqual([(s.name, s.source) for s in roster], [("deploy", "project"), ("pptx", "user"), ("tools:lint", "plugin:tools")])
         answer = tool.index_mode({"project_dir": str(self.root), "options": {}, "scope": "global"})
         self.assertEqual(len(answer["dirs"]), 2)  # user and plugin folders, never the project's
-
-    def test_block_scalar_descriptions_are_joined(self):
-        self.assertEqual(index.load(self.root, False)[0].description, "Ship the app to staging")
 
     def test_explicit_roots_are_host_agnostic(self):
         codex = self.root / ".agents/skills"

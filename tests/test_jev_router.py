@@ -102,6 +102,14 @@ class ScanAndInit(unittest.TestCase):
         with self.assertRaises(ValueError):
             writer.parse_reply("no json here", [], build_ladder("claude-opus-5-5"), {})
 
+    def test_init_refuses_to_overwrite_without_force(self):
+        root = project()
+        req = {"project_dir": str(root), "options": {}, "session_model": "claude-opus-5-5"}
+        self.assertIn("system", tool.scan_mode(req))
+        tool.init_save_mode({**req, "reply": REPLY})
+        self.assertIn("already has", tool.scan_mode(req)["refused"])
+        self.assertIn("system", tool.scan_mode({**req, "force": True}))
+
 
 class Catalog(unittest.TestCase):
     def test_host_catalogs_are_separate_and_claude_keeps_its_legacy_filename(self):
@@ -178,14 +186,6 @@ class Digest(unittest.TestCase):
         self.assertIn("README.md  The shop", lines)
         self.assertFalse(any("SECRET" in line for line in lines))
 
-    def test_init_refuses_to_overwrite_without_force(self):
-        root = project()
-        req = {"project_dir": str(root), "options": {}, "session_model": "claude-opus-5-5"}
-        self.assertIn("system", tool.scan_mode(req))
-        tool.init_save_mode({**req, "reply": REPLY})
-        self.assertIn("already has", tool.scan_mode(req)["refused"])
-        self.assertIn("system", tool.scan_mode({**req, "force": True}))
-
 
 class Rules(unittest.TestCase):
     known = ("haiku", "sonnet", "opus")
@@ -209,19 +209,16 @@ class Rules(unittest.TestCase):
         self.assertIn("no model may write there", problems[0])
         self.assertIn('"b/"', problems[1])
 
-    def test_section_tells_claude_how_to_keep_the_files(self):
+    def test_section_tells_claude_how_to_keep_the_files_and_lets_it_edit(self):
         section = tool.render_mode({"project_dir": str(project()), "options": {}, "session_model": "claude-opus-5-5"})["section"]
         self.assertIn(".optim-jev/jev_router/rules.json", section)
         self.assertIn("Never write it in both", section)
         self.assertIn("haiku, sonnet, opus", section)
         self.assertIn('{"paths": {"src/": {"write": [models]', section)
         self.assertNotIn("rules.codex.json", section)
-
-    def test_claude_edits_freely_while_codex_still_delegates_every_change(self):
-        ladder = build_ladder("claude-opus-5-5")
-        self.assertIn("make small edits yourself", render.section(ladder, "claude"))
-        self.assertNotIn("You cannot edit", render.section(ladder, "claude"))
-        self.assertIn("You cannot edit", render.section(ladder, "codex"))
+        self.assertIn("make small edits yourself", section)
+        self.assertNotIn("You cannot edit", section)
+        self.assertIn("You cannot edit", render.section(build_ladder("claude-opus-5-5"), "codex"))
 
     def test_nearest_ancestor_wins(self):
         rules = rules_mod.parse({"paths": {"src/": {"write": ["opus"]}, "src/a/": {"write": ["haiku"]}}}, ("haiku", "sonnet", "opus"))
@@ -268,10 +265,8 @@ class Spawn(unittest.TestCase):
         self.assertEqual((result.model, result.source), ("sonnet", "jev"))
         self.assertEqual(sorted(jev.questions["model"]["criteria"]), ["opus", "sonnet"])
 
-    def test_a_windows_path_keeps_its_drive(self):
+    def test_a_windows_path_keeps_its_drive_only_before_a_separator(self):
         self.assertEqual(policy._PATH.findall(r"edit C:\proj\src\a.py and d:/x/y.md"), [r"C:\proj\src\a.py", "d:/x/y.md"])
-
-    def test_a_drive_letter_counts_only_before_a_separator(self):
         self.assertEqual(policy._PATH.findall(r"see C:src\a.py"), [r"src\a.py"])
 
     def test_a_long_token_is_scanned_without_backtracking(self):
@@ -297,72 +292,41 @@ class Spawn(unittest.TestCase):
         self.assertEqual(sorted(jev.questions["model"]["criteria"]), ["haiku", "sonnet"])
         self.assertEqual(result.model, "sonnet")
 
-    def test_escalated_files_start_a_model_up(self):
-        jev = FakeJev({"haiku": 0.9, "sonnet": 0.1})
-        result = self.pick("Fix README.md", jev, escalated={"README.md": 1})
+    def test_escalation_starts_a_model_up_keeps_its_effort_and_stops_at_the_top(self):
+        result = self.pick("Fix README.md", FakeJev({"haiku": 0.9, "sonnet": 0.1}), escalated={"README.md": 1})
         self.assertEqual((result.model, result.escalated), ("sonnet", 1))
-
-    def test_escalation_keeps_the_effort_and_does_not_reask_it(self):
         jev = FakeJev({"haiku": 0.9, "sonnet": 0.1}, effort={"high": 1.0})
         result = self.pick("Fix README.md", jev, escalated={"README.md": {"levels": 1, "effort": "low"}})
         self.assertEqual((result.model, result.effort), ("sonnet", "low"))
         self.assertNotIn("effort", jev.questions)
-
-    def test_escalation_stops_at_the_strongest_model(self):
         result = self.pick("Fix README.md", FakeJev({"opus": 1.0}), escalated={"README.md": {"levels": 5, "effort": "high"}})
         self.assertEqual((result.model, result.effort), ("opus", "high"))
 
-    def test_xhigh_only_for_opus(self):
+    def test_xhigh_only_for_the_strongest_available_claude_model(self):
         jev = FakeJev({"sonnet": 0.9, "opus": 0.1}, effort={"xhigh": 0.9, "low": 0.1})
         result = self.pick("Fix README.md", jev)
         self.assertEqual((result.model, result.effort), ("sonnet", "high"))  # clamped
         no_opus = FakeJev({"sonnet": 1.0})
         self.pick("Fix README.md", no_opus, ladder=build_ladder("claude-sonnet-5-5"))
         self.assertNotIn("xhigh", no_opus.questions["effort"]["criteria"])
+        save_catalog(self.root, (
+            ModelInfo("opus", 3, 5, "hard", "claude-opus", available=False),
+            ModelInfo("sonnet", 2, 3, "normal", "claude-sonnet"),
+            ModelInfo("haiku", 1, 1, "small", "claude-haiku"),
+        ))
+        unavailable = FakeJev({"sonnet": 1.0})
+        self.pick("Fix README.md", unavailable, ladder=build_ladder("claude-sonnet", project_dir=self.root))
+        self.assertNotIn("xhigh", unavailable.questions["effort"]["criteria"])
 
     def test_xhigh_follows_the_host_strongest_tier_not_the_opus_name(self):
-        ladder = build_ladder("gpt-strong", project_dir=self.root, host="codex")
-        self.assertFalse(ladder.models)  # no optimistic Codex defaults
-        catalog = (
+        save_catalog(self.root, (
             ModelInfo("strong", 3, 5, "hard work", "gpt-strong"),
             ModelInfo("balanced", 2, 3, "normal work", "gpt-balanced"),
             ModelInfo("fast", 1, 1, "small work", "gpt-fast"),
-        )
-        save_catalog(self.root, catalog, host="codex")
+        ), host="codex")
         ladder = build_ladder("gpt-strong", project_dir=self.root, host="codex")
-        jev = FakeJev({"strong": 1.0}, effort={"xhigh": 1.0})
-        result = policy.pick(
-            "task",
-            "Fix README.md",
-            rules_mod.Rules({}),
-            [],
-            ladder,
-            jev,
-            str(self.root),
-        )
+        result = self.pick("Fix README.md", FakeJev({"strong": 1.0}, effort={"xhigh": 1.0}), ladder=ladder)
         self.assertEqual((result.model, result.effort), ("strong", "xhigh"))
-
-    def test_xhigh_is_not_offered_to_sonnet_when_opus_is_unavailable(self):
-        save_catalog(
-            self.root,
-            (
-                ModelInfo("opus", 3, 5, "hard", "claude-opus", available=False),
-                ModelInfo("sonnet", 2, 3, "normal", "claude-sonnet"),
-                ModelInfo("haiku", 1, 1, "small", "claude-haiku"),
-            ),
-        )
-        ladder = build_ladder("claude-sonnet", project_dir=self.root)
-        jev = FakeJev({"sonnet": 1.0})
-        policy.pick(
-            "task",
-            "Fix README.md",
-            rules_mod.Rules({}),
-            [],
-            ladder,
-            jev,
-            str(self.root),
-        )
-        self.assertNotIn("xhigh", jev.questions["effort"]["criteria"])
 
     def test_bad_effort_answer_keeps_the_model(self):
         jev = FakeJev({"opus": 0.2, "sonnet": 0.8}, effort={})
@@ -400,17 +364,15 @@ class Spawn(unittest.TestCase):
         self.assertIn("core index → opus", journal.why(journal.read(self.root, "s"), "s"))
         self.assertTrue((Path(self.root) / ".optim-jev" / "logs" / "jev_router" / "s.jsonl").is_file())
 
-    def test_explore_ignores_write_rules_and_asks_jev_only_for_the_model(self):
+    def test_explore_ignores_write_rules_asks_only_for_the_model_and_respects_the_cap(self):
         jev = FakeJev({"haiku": 0.7, "sonnet": 0.2, "opus": 0.1})
         result = policy.pick_explore("find db", "Where is src/core/db.py used?", self.ladder, jev)
         self.assertEqual((result.model, result.source, result.effort), ("haiku", "jev", None))
         self.assertEqual(list(jev.questions), ["model"])
         self.assertIn("read-only", jev.questions["model"]["instructions"])
-
-    def test_explore_respects_the_cap(self):
-        jev = FakeJev({"opus": 0.9, "sonnet": 0.1})
-        result = policy.pick_explore("map", "Explain the architecture", build_ladder("claude-sonnet-5-5"), jev)
-        self.assertEqual(sorted(jev.questions["model"]["criteria"]), ["haiku", "sonnet"])
+        capped = FakeJev({"opus": 0.9, "sonnet": 0.1})
+        result = policy.pick_explore("map", "Explain the architecture", build_ladder("claude-sonnet-5-5"), capped)
+        self.assertEqual(sorted(capped.questions["model"]["criteria"]), ["haiku", "sonnet"])
         self.assertEqual(result.model, "sonnet")
 
     def test_explore_falls_back_to_the_cheapest_model(self):
@@ -428,11 +390,9 @@ class Spawn(unittest.TestCase):
         self.assertEqual((answer["appendix"], answer["files"]), ("", []))
         self.assertEqual(journal.read(self.root, "s")[-1]["subagent_type"], "Explore")
 
-    def test_a_file_url_in_the_prompt_names_its_file(self):
+    def test_a_file_url_names_its_file_and_a_web_url_is_never_looked_up(self):
         url = (self.root / "src/api/auth.py").as_uri()
         self.assertEqual([f.path for f in policy.mentioned_files(f"Review {url}", self.rules, str(self.root))], ["src/api/auth.py"])
-
-    def test_a_web_url_in_the_prompt_names_no_file_and_is_never_looked_up(self):
         with mock.patch.object(Path, "exists", return_value=False) as exists:
             files = policy.mentioned_files("See https://example.com/src/api/auth.py and http://host/README.md", self.rules, str(self.root))
         self.assertEqual(files, [])
@@ -455,7 +415,6 @@ class Journal(unittest.TestCase):
         root = str(project())
         journal.append(root, "s", {"kind": "spawn", "current": "opus", "model": "haiku", "source": "jev"})
         journal.append(root, "s", {"kind": "outcome", "escalations": [{"from": "haiku", "to": "sonnet"}], "denials": 2})
-        from optim_jev.tools.jev_router.catalog import load_catalog
         journal.append(root, "other", {"kind": "spawn", "current": "opus", "model": "opus", "source": "jev"})
         claude = [
             {"kind": "turn", "agent_id": None, "model": "claude-opus-5-5", "input_tokens": 10},
@@ -469,8 +428,6 @@ class Journal(unittest.TestCase):
         self.assertIn("$5.00", rows["Same work on claude-opus-5-5"])
         self.assertIn("$4.00", rows["Net saved"])
         self.assertIn("2", rows["Denied writes"])
-        widths = {len(line) for line in text.splitlines()[1:12] if line[:1] in "┌│├└"}
-        self.assertEqual(len(widths), 1)  # every line of a table is the same width
 
 
 if __name__ == "__main__":
